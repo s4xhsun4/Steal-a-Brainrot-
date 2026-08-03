@@ -1,0 +1,1651 @@
+local Players         = game:GetService("Players")
+local RunService      = game:GetService("RunService")
+local UserInputService= game:GetService("UserInputService")
+local TweenService    = game:GetService("TweenService")
+local Workspace       = game:GetService("Workspace")
+local LocalPlayer     = Players.LocalPlayer
+local PlayerGui       = LocalPlayer:WaitForChild("PlayerGui")
+
+local Theme = {
+    Background       = Color3.fromRGB(15, 15, 20),
+    Surface          = Color3.fromRGB(22, 22, 30),
+    SurfaceHighlight = Color3.fromRGB(35, 35, 45),
+    Accent1          = Color3.fromRGB(0, 225, 255),
+    Accent2          = Color3.fromRGB(180, 0, 255),
+    TextPrimary      = Color3.fromRGB(240, 240, 240),
+    TextSecondary    = Color3.fromRGB(140, 140, 150),
+    Success          = Color3.fromRGB(30, 150, 90),
+    Error            = Color3.fromRGB(255, 60, 80),
+}
+
+local Config = {
+    ClickToAP                    = false,
+    ClickToAPSingleCommand       = false,
+    ProximityRange               = 15,
+    DisableProximitySpamOnMoby   = false,
+    DisableProximitySpamOnKawaifu= false,
+    DisableClickToAPOnMoby       = false,
+    DisableClickToAPOnKawaifu    = false,
+    CancelAPPanelOnMoby          = false,
+    CancelAPPanelOnKawaifu       = false,
+    HideAdminPanel               = false,
+    UILocked                     = false,
+    Positions = {
+        AdminPanel = { X = 0.1859375, Y = 0.5767123526556385, OffsetX = 0, OffsetY = 0 },
+    },
+}
+
+local SharedState = {
+    AdminButtonCache  = {},
+    BalloonedPlayers  = {},
+    AdminProxBtn      = nil,
+}
+
+local ProximityAPActive = false
+local lastActionUse     = {}
+local ACTION_COOLDOWNS  = {}
+
+local function SaveConfig() end
+
+local function isMobyUser(player)
+    if not player or not player.Character then return false end
+    return player.Character:FindFirstChild("_moby_highlight") ~= nil
+end
+
+local function isKawaifuUser(player)
+    if not player or not player.Character then return false end
+    return player.Character:FindFirstChild("KaWaifu_NeonHighlight") ~= nil
+end
+
+local function ShowNotification() end
+
+local function MakeDraggable(handle, target, saveKey)
+    local dragging, dragInput, dragStart, startPos
+
+    handle.InputBegan:Connect(function(input)
+        if Config.UILocked then return end
+        if _G.ADMIN_PANEL_SLIDER_DRAG then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = target.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                    if saveKey then
+                        Config.Positions[saveKey] = {
+                            X = target.Position.X.Scale,
+                            Y = target.Position.Y.Scale,
+                            OffsetX = target.Position.X.Offset,
+                            OffsetY = target.Position.Y.Offset,
+                        }
+                        SaveConfig()
+                    end
+                end
+            end)
+        end
+    end)
+
+    handle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if _G.ADMIN_PANEL_SLIDER_DRAG then return end
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            target.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+do
+    local function fireClick(button)
+        if not button then return false end
+        local ok = pcall(function()
+            if typeof(firesignal) == "function" then
+                if button.MouseButton1Click then firesignal(button.MouseButton1Click) end
+                if button.MouseButton1Down then firesignal(button.MouseButton1Down) end
+                if button.Activated then firesignal(button.Activated) end
+            else
+                local x = button.AbsolutePosition.X + (button.AbsoluteSize.X / 2)
+                local y = button.AbsolutePosition.Y + (button.AbsoluteSize.Y / 2) + 58
+                VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+                VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+            end
+        end)
+        return ok
+    end
+    _G.fireClick = fireClick
+
+    local function runAdminCommand(targetPlayer, commandName)
+        if not targetPlayer or not commandName or commandName == "" then return false end
+        local realAdminGui = PlayerGui:WaitForChild("AdminPanel", 5)
+        if not realAdminGui then return false end
+
+        local okContent, contentScroll = pcall(function()
+            return realAdminGui.AdminPanel:WaitForChild("Content"):WaitForChild("ScrollingFrame")
+        end)
+        if not okContent or not contentScroll then return false end
+
+        local cmdBtn = contentScroll:FindFirstChild(commandName)
+        if not cmdBtn then return false end
+        if not fireClick(cmdBtn) then return false end
+
+        task.wait(0.05)
+
+        local okProfiles, profilesScroll = pcall(function()
+            return realAdminGui:WaitForChild("AdminPanel"):WaitForChild("Profiles"):WaitForChild("ScrollingFrame")
+        end)
+        if not okProfiles or not profilesScroll then return false end
+
+        local playerBtn = profilesScroll:FindFirstChild(targetPlayer.Name)
+        if not playerBtn then return false end
+        if not fireClick(playerBtn) then return false end
+
+        return true
+    end
+    _G.runAdminCommand = runAdminCommand
+end
+
+do
+    local AP_ALL_COMMANDS = {
+        "balloon", "inverse", "jail", "jumpscare", "morph",
+        "nightvision", "ragdoll", "rocket", "tiny"
+    }
+
+    local apHighlight = Instance.new("Highlight")
+    apHighlight.Name = "DebrokClickAPHighlight"
+    apHighlight.FillColor = Theme.Accent1
+    apHighlight.FillTransparency = 0.3
+    apHighlight.OutlineColor = Theme.Accent1
+    apHighlight.OutlineTransparency = 0
+    apHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    apHighlight.Adornee = nil
+    apHighlight.Parent = game:GetService("CoreGui")
+
+    local function apIsOnCooldown(cmd)
+        local adminGui = PlayerGui:FindFirstChild("AdminPanel")
+        if adminGui then
+            local ok, visible = pcall(function()
+                local cmdButton = adminGui.AdminPanel.Content.ScrollingFrame:FindFirstChild(cmd)
+                local timerLabel = cmdButton and cmdButton:FindFirstChild("Timer")
+                return timerLabel and timerLabel.Visible
+            end)
+            if ok and visible then
+                return true
+            end
+        end
+
+        if type(lastActionUse) == "table" then
+            local last = lastActionUse[cmd]
+            local cd = (ACTION_COOLDOWNS and ACTION_COOLDOWNS[cmd]) or 0
+            if last and cd > 0 and (tick() - last) < cd then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function apSetVisualCooldown(cmd)
+        if type(lastActionUse) == "table" then
+            lastActionUse[cmd] = tick()
+        end
+
+        if SharedState.AdminButtonCache and SharedState.AdminButtonCache[cmd] then
+            for _, b in ipairs(SharedState.AdminButtonCache[cmd]) do
+                if b and b.Parent then
+                    pcall(function()
+                        b.BackgroundColor3 = Theme.Error
+                    end)
+                    task.delay((ACTION_COOLDOWNS and ACTION_COOLDOWNS[cmd]) or 5, function()
+                        if b and b.Parent then
+                            pcall(function()
+                                local hasBallooned = (cmd == "balloon" and SharedState.BalloonedPlayers and next(SharedState.BalloonedPlayers) ~= nil)
+                                b.BackgroundColor3 = hasBallooned and Theme.Error or Theme.SurfaceHighlight
+                            end)
+                        end
+                    end)
+                end
+            end
+        end
+    end
+
+    local function apUpdateBalloonButtons()
+        local hasBallooned = SharedState.BalloonedPlayers and next(SharedState.BalloonedPlayers) ~= nil
+        if SharedState.AdminButtonCache and SharedState.AdminButtonCache["balloon"] then
+            for _, b in ipairs(SharedState.AdminButtonCache["balloon"]) do
+                if b and b.Parent then
+                    pcall(function()
+                        b.BackgroundColor3 = hasBallooned and Theme.Error or Theme.SurfaceHighlight
+                    end)
+                end
+            end
+        end
+    end
+
+    local function apGetNextAvailableCommand()
+        local priorityCommands = {"ragdoll", "balloon", "rocket", "jail"}
+        local seen = {}
+
+        for _, cmd in ipairs(priorityCommands) do
+            seen[cmd] = true
+            if not apIsOnCooldown(cmd) then
+                return cmd
+            end
+        end
+
+        for _, cmd in ipairs(AP_ALL_COMMANDS) do
+            if not seen[cmd] and not apIsOnCooldown(cmd) then
+                return cmd
+            end
+        end
+
+        return nil
+    end
+
+    local function apTriggerAll(plr, spacing)
+        spacing = tonumber(spacing) or 0.1
+        local count = 0
+        for _, cmd in ipairs(AP_ALL_COMMANDS) do
+            if not apIsOnCooldown(cmd) then
+                task.delay(count * spacing, function()
+                    if not plr or not plr.Parent or plr == LocalPlayer then return end
+                    local ok, res = pcall(_G.runAdminCommand, plr, cmd)
+                    if ok and res then
+                        apSetVisualCooldown(cmd)
+                        if cmd == "balloon" then
+                            SharedState.BalloonedPlayers[plr.UserId] = true
+                            apUpdateBalloonButtons()
+                        end
+                    end
+                end)
+                count = count + 1
+            end
+        end
+    end
+
+    local proximityRoundRobinIndex = 0
+
+    local function getEligibleProximityPlayers()
+        local result = {}
+        local myChar = LocalPlayer.Character
+        local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if not myHrp then return result end
+
+        local range = tonumber(Config.ProximityRange) or 15
+
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Parent and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local targetHrp = p.Character.HumanoidRootPart
+                local dist = (targetHrp.Position - myHrp.Position).Magnitude
+                if dist <= range then
+                    if not ((Config.DisableProximitySpamOnMoby and isMobyUser(p)) or (Config.DisableProximitySpamOnKawaifu and isKawaifuUser(p))) then
+                        table.insert(result, p)
+                    end
+                end
+            end
+        end
+
+        table.sort(result, function(a, b)
+            return a.UserId < b.UserId
+        end)
+
+        return result
+    end
+
+    local function apTriggerNextProximityStep()
+        local playersInRange = getEligibleProximityPlayers()
+        if #playersInRange <= 0 then return end
+
+        local nextCmd = apGetNextAvailableCommand()
+        if not nextCmd then return end
+
+        proximityRoundRobinIndex = (proximityRoundRobinIndex % #playersInRange) + 1
+        local targetPlayer = playersInRange[proximityRoundRobinIndex]
+        if not targetPlayer then return end
+
+        local ok, res = pcall(_G.runAdminCommand, targetPlayer, nextCmd)
+        if ok and res then
+            apSetVisualCooldown(nextCmd)
+            if nextCmd == "balloon" then
+                SharedState.BalloonedPlayers[targetPlayer.UserId] = true
+                apUpdateBalloonButtons()
+            end
+        end
+    end
+
+    local function rayToCubeIntersect(rayOrigin, rayDirection, cubeCenter, cubeSize)
+        local halfSize = Vector3.new(cubeSize/2, cubeSize/2, cubeSize/2)
+        local minBounds = cubeCenter - halfSize
+        local maxBounds = cubeCenter + halfSize
+
+        local function safeDiv(a, b)
+            if math.abs(b) < 1e-8 then
+                if a >= 0 then
+                    return math.huge
+                else
+                    return -math.huge
+                end
+            end
+            return a / b
+        end
+
+        local tmin = safeDiv(minBounds.X - rayOrigin.X, rayDirection.X)
+        local tmax = safeDiv(maxBounds.X - rayOrigin.X, rayDirection.X)
+        if tmin > tmax then tmin, tmax = tmax, tmin end
+
+        local tymin = safeDiv(minBounds.Y - rayOrigin.Y, rayDirection.Y)
+        local tymax = safeDiv(maxBounds.Y - rayOrigin.Y, rayDirection.Y)
+        if tymin > tymax then tymin, tymax = tymax, tymin end
+        if tmin > tymax or tymin > tmax then return false end
+        if tymin > tmin then tmin = tymin end
+        if tymax < tmax then tmax = tymax end
+
+        local tzmin = safeDiv(minBounds.Z - rayOrigin.Z, rayDirection.Z)
+        local tzmax = safeDiv(maxBounds.Z - rayOrigin.Z, rayDirection.Z)
+        if tzmin > tzmax then tzmin, tzmax = tzmax, tzmin end
+        if tmin > tzmax or tzmin > tmax then return false end
+
+        return true
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if Config.ClickToAP then
+            local camera = Workspace.CurrentCamera
+            local mousePos = UserInputService:GetMouseLocation()
+            local ray = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+
+            local hitboxSize = 8
+            local bestPlayer = nil
+            local bestDistance = math.huge
+
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Parent then
+                    local hrp = p.Character.HumanoidRootPart
+                    local cubeCenter = hrp.Position
+                    if rayToCubeIntersect(ray.Origin, ray.Direction, cubeCenter, hitboxSize) then
+                        local distance = (ray.Origin - cubeCenter).Magnitude
+                        if distance < bestDistance then
+                            bestDistance = distance
+                            bestPlayer = p
+                        end
+                    end
+                end
+            end
+
+            apHighlight.Adornee = bestPlayer and bestPlayer.Character or nil
+        else
+            apHighlight.Adornee = nil
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(inp, gp)
+        if gp then return end
+        if inp.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        if not Config.ClickToAP then return end
+
+        local camera = Workspace.CurrentCamera
+        local mousePos = UserInputService:GetMouseLocation()
+        local ray = camera:ViewportPointToRay(mousePos.X, mousePos.Y)
+
+        local hitboxSize = 8
+        local bestPlayer = nil
+        local bestDistance = math.huge
+
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and p.Parent then
+                local hrp = p.Character.HumanoidRootPart
+                local cubeCenter = hrp.Position
+                if rayToCubeIntersect(ray.Origin, ray.Direction, cubeCenter, hitboxSize) then
+                    local distance = (ray.Origin - cubeCenter).Magnitude
+                    if distance < bestDistance then
+                        bestDistance = distance
+                        bestPlayer = p
+                    end
+                end
+            end
+        end
+
+        if not bestPlayer then return end
+
+        if Config.DisableClickToAPOnMoby and isMobyUser(bestPlayer) then
+            ShowNotification("CLICK TO AP", "Disabled on Moby users")
+            return
+        end
+        if Config.DisableClickToAPOnKawaifu and isKawaifuUser(bestPlayer) then
+            ShowNotification("CLICK TO AP", "Disabled on Kawaifu users")
+            return
+        end
+
+        local hasAnyAvailable = false
+        for _, cmd in ipairs(AP_ALL_COMMANDS) do
+            if not apIsOnCooldown(cmd) then
+                hasAnyAvailable = true
+                break
+            end
+        end
+
+        if hasAnyAvailable then
+            if Config.ClickToAPSingleCommand then
+                local nextCmd = apGetNextAvailableCommand()
+                if nextCmd then
+                    local ok, res = pcall(_G.runAdminCommand, bestPlayer, nextCmd)
+                    if ok and res then
+                        apSetVisualCooldown(nextCmd)
+                        if nextCmd == "balloon" then
+                            SharedState.BalloonedPlayers[bestPlayer.UserId] = true
+                            apUpdateBalloonButtons()
+                        end
+                        ShowNotification("CLICK AP", "Sent " .. nextCmd .. " to " .. bestPlayer.Name)
+                    else
+                        ShowNotification("CLICK AP", "Failed to send " .. nextCmd .. " to " .. bestPlayer.Name)
+                    end
+                else
+                    ShowNotification("CLICK AP", "All commands on cooldown")
+                end
+            else
+                apTriggerAll(bestPlayer)
+                ShowNotification("CLICK AP", "Triggered on " .. bestPlayer.Name)
+            end
+        else
+            local realAdminGui = PlayerGui:WaitForChild("AdminPanel", 5)
+            if realAdminGui then
+                local profilesScroll = realAdminGui:WaitForChild("AdminPanel"):WaitForChild("Profiles"):WaitForChild("ScrollingFrame")
+                local playerBtn = profilesScroll:FindFirstChild(bestPlayer.Name)
+                if playerBtn then
+                    fireClick(playerBtn)
+                    ShowNotification("CLICK AP", "Selected " .. bestPlayer.Name)
+                end
+            end
+        end
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(0.1)
+            if ProximityAPActive then
+                apTriggerNextProximityStep()
+            end
+        end
+    end)
+end
+
+local function __cleanupResidualAdminPanels()
+    local function textOf(guiObj)
+        local ok, txt = pcall(function()
+            return string.lower(tostring(guiObj.Text or ""))
+        end)
+        return ok and txt or ""
+    end
+
+    local function hasResidual4ButtonSignature(root)
+        if not root then return false end
+        local hasAdminTitle = false
+        local hasPlayerList = false
+        local hasTp = false
+        local actionHits = 0
+
+        for _, desc in ipairs(root:GetDescendants()) do
+            if desc:IsA("TextLabel") or desc:IsA("TextButton") then
+                local txt = textOf(desc)
+                if txt:find("admin panel", 1, true) then hasAdminTitle = true end
+                if txt:find("player list", 1, true) then hasPlayerList = true end
+                if txt == "tp" then hasTp = true end
+                if txt == "⚔" or txt == "🔒" or txt == "🚀" or txt == "🎈" then
+                    actionHits += 1
+                end
+            end
+        end
+
+        return hasAdminTitle and hasPlayerList and actionHits >= 4 and not hasTp
+    end
+
+    local function shouldDestroyGui(gui)
+        if not gui or not gui:IsA("ScreenGui") then return false end
+        if gui.Name == "XiAdminPanel" then return true end
+        if hasResidual4ButtonSignature(gui) then return true end
+        return false
+    end
+
+    local containers = {}
+    pcall(function() table.insert(containers, PlayerGui) end)
+    pcall(function()
+        local cg = game:GetService("CoreGui")
+        if cg then table.insert(containers, cg) end
+    end)
+
+    for _, container in ipairs(containers) do
+        for _, child in ipairs(container:GetChildren()) do
+            if shouldDestroyGui(child) then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end
+end
+
+local function __initAdminPanelLiteralReplacement()
+    __cleanupResidualAdminPanels()
+
+    local RP_COLORS = {
+        Text = Color3.fromRGB(245, 247, 250),
+        SubText = Color3.fromRGB(150, 156, 168),
+        Accent = Color3.fromRGB(255, 255, 255),
+        AccentSoft = Color3.fromRGB(72, 78, 90),
+        AccentBright = Color3.fromRGB(215, 220, 230),
+
+        PanelTop = Color3.fromRGB(12, 13, 17),
+        PanelTop2 = Color3.fromRGB(8, 9, 12),
+        PanelInner = Color3.fromRGB(10, 11, 14),
+        ControlsBar = Color3.fromRGB(8, 9, 12),
+
+        RowA = Color3.fromRGB(17, 19, 24),
+        RowB = Color3.fromRGB(14, 16, 21),
+        RowHover = Color3.fromRGB(23, 26, 33),
+        RowLine = Color3.fromRGB(42, 46, 58),
+
+        ButtonBg = Color3.fromRGB(14, 16, 21),
+        ButtonStroke = Color3.fromRGB(76, 82, 94),
+        LockedFill = Color3.fromRGB(86, 69, 26),
+        Danger = Color3.fromRGB(167, 58, 62),
+        Yellow = Color3.fromRGB(255, 213, 96),
+        White = Color3.fromRGB(255, 255, 255),
+
+        PanelCorner = 3,
+        RowCorner = 3,
+        ButtonCorner = 3,
+        AvatarCorner = 3,
+    }
+
+    RP_COLORS.RowHeight = 54
+    RP_COLORS.ButtonSize = 38
+    RP_COLORS.BoxSize = 32
+    RP_COLORS.IconSize = 17
+    RP_COLORS.ActionsWidth = 5 * RP_COLORS.ButtonSize
+    RP_COLORS.SafeGap = 12
+    RP_COLORS.NameSize = 16
+    RP_COLORS.UserSize = 12
+    RP_COLORS.StatusSize = 11
+
+    local RP_BUTTONS = {
+        { label = "🏃", action = "ragdoll" },
+        { label = "🔒", action = "jail" },
+        { label = "🚀", action = "rocket" },
+        { label = "🎈", action = "balloon" },
+        { label = "🦀", action = "tiny" },
+    }
+
+    local RP_ACTION_COOLDOWNS = {
+        ragdoll = 30,
+        jail = 60,
+        rocket = 120,
+        balloon = 30,
+        tiny = 30,
+    }
+
+    local function rpMake(instType, props)
+        local obj = Instance.new(instType)
+        for k, v in pairs(props or {}) do
+            obj[k] = v
+        end
+        return obj
+    end
+
+    local function rpCorner(parent, radius)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, radius or 10)
+        c.Parent = parent
+        return c
+    end
+
+    local function rpStroke(parent, color, thickness, transparency)
+        local s = Instance.new("UIStroke")
+        s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        s.LineJoinMode = Enum.LineJoinMode.Round
+        s.Color = color
+        s.Thickness = thickness or 1
+        s.Transparency = transparency or 0
+        s.Parent = parent
+        return s
+    end
+
+    local function rpGradient(parent, c1, c2, rot)
+        local g = Instance.new("UIGradient")
+        g.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, c1),
+            ColorSequenceKeypoint.new(1, c2),
+        })
+        g.Rotation = rot or 0
+        g.Parent = parent
+        return g
+    end
+
+    local activeCooldownsRef = {}
+    local actionButtonsRef = { ragdoll = {}, jail = {}, rocket = {}, balloon = {}, tiny = {} }
+    local rpui = {}
+    local rows = {}
+
+    local function rpGetCooldown(action)
+        return RP_ACTION_COOLDOWNS[action] or 0
+    end
+
+    local function rpIsOnCooldown(action)
+        local last = activeCooldownsRef[action]
+        local cd = rpGetCooldown(action)
+        if not last or cd <= 0 then return false end
+        return (tick() - last) < cd
+    end
+
+    local function rpSetButtonVisual(btn, state)
+        local box = btn:FindFirstChild("Box")
+        local stroke = box and box:FindFirstChild("Stroke")
+        local fill = box and box:FindFirstChild("Fill")
+        if not box or not stroke or not fill then return end
+
+        if state == "normal" then
+            fill.BackgroundColor3 = RP_COLORS.ButtonBg
+            fill.BackgroundTransparency = 0.08
+            stroke.Color = RP_COLORS.ButtonStroke
+            stroke.Transparency = 1
+        elseif state == "hover" then
+            fill.BackgroundColor3 = RP_COLORS.RowHover
+            fill.BackgroundTransparency = 0
+            stroke.Color = RP_COLORS.AccentBright
+            stroke.Transparency = 1
+        elseif state == "locked" then
+            fill.BackgroundColor3 = Color3.fromRGB(145, 34, 34)
+            fill.BackgroundTransparency = 0.02
+            stroke.Color = Color3.fromRGB(255, 120, 120)
+            stroke.Transparency = 0.35
+        end
+    end
+
+    local function rpSetButtonsState(action, locked)
+        for _, btn in ipairs(actionButtonsRef[action] or {}) do
+            if btn and btn.Parent then
+                local targetName = btn:GetAttribute("TargetPlayerName")
+                local targetPlayer = targetName and Players:FindFirstChild(targetName) or nil
+                local blocked = targetPlayer and rpIsAdminPanelBlockedForPlayer and rpIsAdminPanelBlockedForPlayer(targetPlayer) or false
+                local disabled = locked or blocked
+                btn.Active = not disabled
+                btn:SetAttribute("Locked", disabled)
+                if disabled then
+                    rpSetButtonVisual(btn, "locked")
+                else
+                    rpSetButtonVisual(btn, "normal")
+                end
+            end
+        end
+    end
+
+    local function rpIsAdminPanelBlockedForPlayer(plr)
+        return (Config.CancelAPPanelOnMoby and isMobyUser and isMobyUser(plr))
+            or (Config.CancelAPPanelOnKawaifu and isKawaifuUser and isKawaifuUser(plr))
+    end
+
+    local function rpRefreshActionButtonsForPlayer(plr)
+        if not plr then return end
+        local row = rows and rows[plr.UserId]
+        if not row or not row.Parent then return end
+
+        local actions = row:FindFirstChild("Actions")
+        if not actions then return end
+
+        local blocked = rpIsAdminPanelBlockedForPlayer(plr)
+        for _, btn in ipairs(actions:GetChildren()) do
+            if btn:IsA("TextButton") then
+                local actionName = btn:GetAttribute("ActionName")
+                local locked = blocked or (actionName and rpIsOnCooldown(actionName)) or false
+                btn.Active = not locked
+                btn:SetAttribute("Locked", locked)
+                if locked then
+                    rpSetButtonVisual(btn, "locked")
+                else
+                    rpSetButtonVisual(btn, "normal")
+                end
+            end
+        end
+    end
+
+    local function rpStartCooldown(action)
+        if rpGetCooldown(action) <= 0 then
+            return
+        end
+        activeCooldownsRef[action] = tick()
+        rpSetButtonsState(action, true)
+        task.spawn(function()
+            while rpIsOnCooldown(action) do
+                task.wait(0.2)
+            end
+            rpSetButtonsState(action, false)
+        end)
+    end
+
+    local function rpRunAdminCommand(targetPlayer, commandName)
+        if _G.runAdminCommand then
+            local ok, res = pcall(_G.runAdminCommand, targetPlayer, commandName)
+            return ok and res
+        end
+        if type(runAdminCommand) == "function" then
+            local ok, res = pcall(runAdminCommand, targetPlayer, commandName)
+            return ok and res
+        end
+        return false
+    end
+
+    rpui.adminGui = rpMake("ScreenGui", {
+        Name = "XiAdminPanel",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = PlayerGui
+    })
+
+    rpui.outer = rpMake("Frame", {
+        Name = "Frame",
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.fromOffset(530, 44),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Position = UDim2.new(
+            Config.Positions.AdminPanel.X,
+            Config.Positions.AdminPanel.OffsetX or 0,
+            Config.Positions.AdminPanel.Y,
+            Config.Positions.AdminPanel.OffsetY or 0
+        ),
+        ZIndex = 10,
+        Parent = rpui.adminGui
+    })
+
+    rpui.backdrop = rpMake("Frame", {
+        Name = "Backdrop",
+        BackgroundColor3 = Color3.fromRGB(8, 9, 12),
+        BackgroundTransparency = 0.50,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(-3, -2),
+        Size = UDim2.new(1, 6, 1, 4),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        ZIndex = 0,
+        Parent = rpui.outer
+    })
+    rpCorner(rpui.backdrop, 8)
+    rpStroke(rpui.backdrop, RP_COLORS.AccentSoft, 1, 0.82)
+
+    rpui.topCard = rpMake("Frame", {
+        Name = "TopCard",
+        BackgroundColor3 = RP_COLORS.PanelTop,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 42),
+        Parent = rpui.outer
+    })
+    rpCorner(rpui.topCard, RP_COLORS.PanelCorner)
+    rpStroke(rpui.topCard, RP_COLORS.AccentSoft, 1.2, 1)
+    rpGradient(rpui.topCard, RP_COLORS.PanelTop, RP_COLORS.PanelTop2, 90)
+
+    rpui.refreshBtn = rpMake("TextButton", {
+        Size = UDim2.fromOffset(72, 24),
+        Position = UDim2.fromOffset(10, 8),
+        BackgroundColor3 = Color3.fromRGB(24, 27, 33),
+        AutoButtonColor = false,
+        Text = "Refresh",
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextColor3 = RP_COLORS.Text,
+        Visible = false,
+        Parent = rpui.topCard
+    })
+
+    rpui.closeBtn = rpMake("TextButton", {
+        Size = UDim2.fromOffset(18, 18),
+        Position = UDim2.new(1, -28, 0, 10),
+        BackgroundColor3 = Color3.fromRGB(22, 24, 30),
+        AutoButtonColor = false,
+        Text = "□",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 9,
+        TextColor3 = RP_COLORS.Text,
+        Visible = false,
+        Parent = rpui.topCard
+    })
+
+    rpui.title = rpMake("TextLabel", {
+        BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0.5, 0),
+        Position = UDim2.new(0.5, 0, 0, 8),
+        Size = UDim2.new(0, 220, 0, 22),
+        TextXAlignment = Enum.TextXAlignment.Center,
+        Text = "Admin Commands",
+        Font = Enum.Font.GothamBlack,
+        TextSize = 16,
+        TextColor3 = RP_COLORS.Text,
+        Visible = false,
+        Parent = rpui.topCard
+    })
+
+    rpui.controlsBar = rpMake("Frame", {
+        Name = "ControlsBar",
+        BackgroundColor3 = Color3.fromRGB(8, 9, 12),
+        BackgroundTransparency = 0,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(6, 6),
+        Size = UDim2.new(1, -12, 0, 40),
+        Parent = rpui.topCard
+    })
+    rpCorner(rpui.controlsBar, 8)
+
+    rpui.controls = rpMake("Frame", {
+        Name = "Controls",
+        BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(8, 4),
+        Size = UDim2.new(1, -16, 1, -8),
+        Parent = rpui.controlsBar
+    })
+
+    rpui.proxBtn = rpMake("TextButton", {
+        Name = "ProximityAPButton",
+        Size = UDim2.fromOffset(52, 24),
+        Position = UDim2.fromOffset(2, 7),
+        BackgroundColor3 = Color3.fromRGB(20, 22, 28),
+        AutoButtonColor = false,
+        Text = "Prox",
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextColor3 = RP_COLORS.Text,
+        Parent = rpui.controls
+    })
+    rpCorner(rpui.proxBtn, 3)
+    rpui.proxBtnStroke = rpStroke(rpui.proxBtn, RP_COLORS.ButtonStroke, 1, 0.28)
+
+    rpui.spamBaseBtn = rpMake("TextButton", {
+        Size = UDim2.fromOffset(90, 24),
+        Position = UDim2.fromOffset(62, 7),
+        BackgroundColor3 = Color3.fromRGB(20, 22, 28),
+        AutoButtonColor = false,
+        Text = "Spam Base Owner",
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextColor3 = RP_COLORS.Text,
+        Parent = rpui.controls
+    })
+    rpCorner(rpui.spamBaseBtn, 3)
+    rpui.spamStroke = rpStroke(rpui.spamBaseBtn, RP_COLORS.ButtonStroke, 1, 0.28)
+
+    rpui.rangeLabel = rpMake("TextLabel", {
+        BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(160, 7),
+        Size = UDim2.fromOffset(38, 24),
+        Text = tostring(math.floor(Config.ProximityRange or 15)),
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextColor3 = RP_COLORS.Text,
+        Parent = rpui.controls
+    })
+
+    rpui.proxSliderBg = rpMake("Frame", {
+        BackgroundColor3 = Color3.fromRGB(44, 48, 57),
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(198, 17),
+        Size = UDim2.fromOffset(170, 6),
+        Parent = rpui.controls
+    })
+    rpCorner(rpui.proxSliderBg, 3)
+
+    rpui.proxFill = rpMake("Frame", {
+        BackgroundColor3 = RP_COLORS.White,
+        BorderSizePixel = 0,
+        Size = UDim2.new(0, 0, 1, 0),
+        Parent = rpui.proxSliderBg
+    })
+    rpCorner(rpui.proxFill, 3)
+
+    rpui.proxKnob = rpMake("Frame", {
+        BackgroundColor3 = RP_COLORS.White,
+        BorderSizePixel = 0,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.fromOffset(16, 16),
+        Parent = rpui.proxSliderBg
+    })
+    rpCorner(rpui.proxKnob, 3)
+    rpui.proxKnobStroke = rpStroke(rpui.proxKnob, Color3.fromRGB(18, 21, 27), 1.2, 0.35)
+
+    rpui.listHolder = rpMake("Frame", {
+        Name = "ListHolder",
+        BackgroundColor3 = RP_COLORS.PanelInner,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Position = UDim2.new(0, 0, 0, 46),
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Parent = rpui.outer
+    })
+    rpCorner(rpui.listHolder, RP_COLORS.PanelCorner)
+
+    rpui.pad = Instance.new("UIPadding")
+    rpui.pad.PaddingTop = UDim.new(0, 2)
+    rpui.pad.PaddingBottom = UDim.new(0, 2)
+    rpui.pad.PaddingLeft = UDim.new(0, 4)
+    rpui.pad.PaddingRight = UDim.new(0, 4)
+    rpui.pad.Parent = rpui.listHolder
+
+    local list = rpMake("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 2),
+        Parent = rpui.listHolder
+    })
+
+    MakeDraggable(rpui.topCard, rpui.outer, "AdminPanel")
+
+    local stealLabels = {}
+    local attrCons = {}
+    local rowCreateCounter = 0
+
+    local function updateProxButton()
+        local enabled = ProximityAPActive == true
+        rpui.proxBtn.BackgroundColor3 = enabled and Color3.fromRGB(58, 63, 74) or Color3.fromRGB(20, 22, 28)
+        rpui.proxBtn.TextColor3 = RP_COLORS.Text
+        rpui.proxBtnStroke.Color = enabled and Color3.fromRGB(220, 225, 235) or RP_COLORS.ButtonStroke
+    end
+
+    local proxViz = nil
+    local function updateProxViz()
+        if ProximityAPActive then
+            if not proxViz then
+                proxViz = Instance.new("Part")
+                proxViz.Name = "XiProxViz"
+                proxViz.Anchored = true
+                proxViz.CanCollide = false
+                proxViz.Shape = Enum.PartType.Cylinder
+                proxViz.Color = RP_COLORS.AccentBright
+                proxViz.Transparency = 0.6
+                proxViz.CastShadow = false
+                proxViz.Parent = Workspace
+            end
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                proxViz.Size = Vector3.new(0.5, (Config.ProximityRange or 15) * 2, (Config.ProximityRange or 15) * 2)
+                proxViz.CFrame = hrp.CFrame * CFrame.Angles(0, 0, math.rad(90))
+            end
+        elseif proxViz then
+            proxViz:Destroy()
+            proxViz = nil
+        end
+    end
+
+    local function updateProxSlider(val)
+        local min, max = 5, 50
+        val = math.clamp(val or 15, min, max)
+        Config.ProximityRange = val
+        SaveConfig()
+        local pct = (val - min) / (max - min)
+        rpui.proxFill.Size = UDim2.new(pct, 0, 1, 0)
+        rpui.proxKnob.Position = UDim2.new(pct, 0, 0.5, 0)
+        rpui.rangeLabel.Text = tostring(math.floor(val + 0.5))
+        updateProxViz()
+    end
+
+    updateProxSlider(Config.ProximityRange or 15)
+    updateProxButton()
+
+    SharedState.ProximityAPButton = rpui.proxBtn
+    SharedState.ProximityAPButtonStroke = rpui.proxBtnStroke
+    SharedState.AdminProxBtn = rpui.proxBtn
+
+    local draggingProx = false
+    rpui.proxSliderBg.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            draggingProx = true
+            _G.ADMIN_PANEL_SLIDER_DRAG = true
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            draggingProx = false
+            _G.ADMIN_PANEL_SLIDER_DRAG = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if draggingProx and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            local x = i.Position.X
+            local r = rpui.proxSliderBg.AbsolutePosition.X
+            local w = rpui.proxSliderBg.AbsoluteSize.X
+            local p = math.clamp((x - r) / w, 0, 1)
+            updateProxSlider(5 + (p * 45))
+        end
+    end)
+
+    rpui.proxBtn.MouseButton1Click:Connect(function()
+        ProximityAPActive = not ProximityAPActive
+        updateProxButton()
+        updateProxViz()
+        ShowNotification("PROXIMITY AP", ProximityAPActive and "ENABLED" or "DISABLED")
+    end)
+
+    rpui.spamBaseBtn.MouseButton1Click:Connect(function()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            ShowNotification("SPAM OWNER", "No character found")
+            return
+        end
+
+        local nearestPlot = nil
+        local nearestDist = math.huge
+        local Plots = Workspace:FindFirstChild("Plots")
+        if Plots then
+            for _, plot in ipairs(Plots:GetChildren()) do
+                local sign = plot:FindFirstChild("PlotSign")
+                if sign then
+                    local yourBase = sign:FindFirstChild("YourBase")
+                    if not yourBase or not yourBase.Enabled then
+                        local signPos = sign:IsA("BasePart") and sign.Position or (sign.PrimaryPart and sign.PrimaryPart.Position)
+                        if not signPos then
+                            local part = sign:FindFirstChildWhichIsA("BasePart", true)
+                            signPos = part and part.Position
+                        end
+                        if signPos then
+                            local dist = (hrp.Position - signPos).Magnitude
+                            if dist < nearestDist then
+                                nearestDist = dist
+                                nearestPlot = plot
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        if not nearestPlot then
+            ShowNotification("SPAM OWNER", "No nearby base found")
+            return
+        end
+
+        local targetPlayer = nil
+        local ok, ch = pcall(function() return Synchronizer:Get(nearestPlot.Name) end)
+        if ok and ch then
+            local owner = ch:Get("Owner")
+            if owner then
+                if typeof(owner) == "Instance" and owner:IsA("Player") then
+                    targetPlayer = owner
+                elseif type(owner) == "table" and owner.Name then
+                    targetPlayer = Players:FindFirstChild(owner.Name)
+                elseif type(owner) == "table" and owner.UserId then
+                    targetPlayer = Players:GetPlayerByUserId(owner.UserId)
+                end
+            end
+        end
+
+        if not targetPlayer then
+            local sign = nearestPlot:FindFirstChild("PlotSign")
+            local textLabel = sign and sign:FindFirstChild("SurfaceGui") and sign.SurfaceGui:FindFirstChild("Frame") and sign.SurfaceGui.Frame:FindFirstChild("TextLabel")
+            if textLabel then
+                local baseText = textLabel.Text
+                local nickname = baseText and baseText:match("^(.-)'") or baseText
+                if nickname then
+                    for _, p in ipairs(Players:GetPlayers()) do
+                        if p.DisplayName == nickname or p.Name == nickname then
+                            targetPlayer = p
+                            break
+                        end
+                    end
+                end
+            end
+        end
+
+        if not targetPlayer or targetPlayer == LocalPlayer then
+            ShowNotification("SPAM OWNER", "Owner not found or is you")
+            return
+        end
+
+        rpui.spamBaseBtn.BackgroundColor3 = Color3.fromRGB(58, 63, 74)
+        rpui.spamBaseBtn.TextColor3 = RP_COLORS.Text
+        ShowNotification("SPAM OWNER", "Spamming " .. targetPlayer.DisplayName)
+
+        task.spawn(function()
+            local cmds = {"balloon", "inverse", "jail", "jumpscare", "morph", "nightvision", "ragdoll", "rocket", "tiny"}
+            local cmdCount = 0
+            for _, cmd in ipairs(cmds) do
+                local success = rpRunAdminCommand(targetPlayer, cmd)
+                if success then
+                    cmdCount = cmdCount + 1
+                end
+                task.wait(0.15)
+            end
+
+            task.wait(0.2)
+            rpui.spamBaseBtn.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+            rpui.spamBaseBtn.TextColor3 = RP_COLORS.Text
+            ShowNotification("SPAM OWNER", "Sent " .. cmdCount .. " commands to " .. targetPlayer.DisplayName)
+        end)
+    end)
+
+    local function sortRows()
+        local entries = {}
+        for _, row in ipairs(rpui.listHolder:GetChildren()) do
+            if row:IsA("Frame") and row.Name:match("^Row_") then
+                local createIndex = tonumber(row:GetAttribute("CreateIndex")) or math.huge
+                local playerName = row:GetAttribute("PlayerName") or ""
+                table.insert(entries, { row = row, createIndex = createIndex, playerName = playerName })
+            end
+        end
+        table.sort(entries, function(a, b)
+            if a.createIndex ~= b.createIndex then
+                return a.createIndex < b.createIndex
+            end
+            return a.playerName < b.playerName
+        end)
+        for i, entry in ipairs(entries) do
+            entry.row.LayoutOrder = i
+        end
+    end
+
+    local function updateStatus(plr)
+        local status = stealLabels[plr.UserId]
+        if not status or not status.Parent then return end
+        local stealing = plr:GetAttribute("Stealing")
+        local brainrotName = plr:GetAttribute("StealingIndex")
+        if stealing then
+            local display = tostring(brainrotName or "Unknown")
+            status.Text = "STEALING • " .. display
+            status.TextColor3 = RP_COLORS.Yellow
+        else
+            status.Text = ""
+        end
+    end
+
+    local function createUserTag(parent, kind, xOffset)
+        local labelText = kind == "kawaifu" and "KAWAIFU" or "MOBY"
+        local bgColor = kind == "kawaifu" and Color3.fromRGB(228, 91, 176) or Color3.fromRGB(68, 136, 255)
+        local width = kind == "kawaifu" and 58 or 38
+
+        local existing = parent:FindFirstChild("UserTag_MOBY") or parent:FindFirstChild("UserTag_KAWAIFU")
+        if existing then
+            existing:Destroy()
+        end
+
+        local tag = rpMake("TextLabel", {
+            Name = "UserTag_" .. labelText,
+            BackgroundColor3 = bgColor,
+            BorderSizePixel = 0,
+            Position = UDim2.fromOffset(xOffset, 8),
+            Size = UDim2.fromOffset(width, 16),
+            Text = labelText,
+            Font = Enum.Font.GothamBold,
+            TextSize = 9,
+            TextColor3 = Color3.fromRGB(255, 255, 255),
+            TextXAlignment = Enum.TextXAlignment.Center,
+            ZIndex = 11,
+            Parent = parent
+        })
+        rpCorner(tag, 5)
+        return tag
+    end
+
+    local function getUserTagKind(plr)
+        if isKawaifuUser and isKawaifuUser(plr) then
+            return "kawaifu"
+        end
+        if isMobyUser and isMobyUser(plr) then
+            return "moby"
+        end
+        return nil
+    end
+
+    local function updateUserTag(plr)
+        local row = rows[plr.UserId]
+        if not row or not row.Parent then return end
+        rpRefreshActionButtonsForPlayer(plr)
+
+        local existing = row:FindFirstChild("UserTag_MOBY") or row:FindFirstChild("UserTag_KAWAIFU")
+        local kind = getUserTagKind(plr)
+
+        if not kind then
+            if existing then
+                existing:Destroy()
+            end
+            return
+        end
+
+        local function computeTagOffset(targetRow)
+            local nameLabel = targetRow and targetRow:FindFirstChild("DisplayNameLabel")
+            local textWidthPx = 90
+            if nameLabel and nameLabel:IsA("TextLabel") then
+                local boundsX = nameLabel.TextBounds.X
+                if boundsX and boundsX > 0 then
+                    textWidthPx = boundsX
+                end
+            end
+            return 50 + textWidthPx + 8
+        end
+
+        local wantedName = kind == "kawaifu" and "UserTag_KAWAIFU" or "UserTag_MOBY"
+        local tagOffset = computeTagOffset(row)
+
+        if existing and existing.Name == wantedName then
+            existing.Position = UDim2.fromOffset(tagOffset, 8)
+        else
+            if existing then
+                existing:Destroy()
+            end
+            createUserTag(row, kind, tagOffset)
+        end
+
+        task.defer(function()
+            local liveRow = rows[plr.UserId]
+            if not liveRow or not liveRow.Parent then return end
+
+            local liveKind = getUserTagKind(plr)
+            local liveExisting = liveRow:FindFirstChild("UserTag_MOBY") or liveRow:FindFirstChild("UserTag_KAWAIFU")
+
+            if not liveKind then
+                if liveExisting then
+                    liveExisting:Destroy()
+                end
+                return
+            end
+
+            local liveWantedName = liveKind == "kawaifu" and "UserTag_KAWAIFU" or "UserTag_MOBY"
+            local liveOffset = computeTagOffset(liveRow)
+
+            if liveExisting and liveExisting.Name == liveWantedName then
+                liveExisting.Position = UDim2.fromOffset(liveOffset, 8)
+            else
+                if liveExisting then
+                    liveExisting:Destroy()
+                end
+                createUserTag(liveRow, liveKind, liveOffset)
+            end
+        end)
+    end
+
+    local function createActionButton(parent, info, order, targetPlr)
+        local btn = rpMake("TextButton", {
+            Size = UDim2.fromOffset(RP_COLORS.ButtonSize, RP_COLORS.ButtonSize),
+            BackgroundTransparency = 1,
+            AutoButtonColor = false,
+            Text = "",
+            LayoutOrder = order,
+            Parent = parent
+        })
+
+        local box = rpMake("Frame", {
+            Name = "Box",
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.fromOffset(RP_COLORS.BoxSize, RP_COLORS.BoxSize),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Parent = btn
+        })
+        rpCorner(box, 6)
+
+        local fill = rpMake("Frame", {
+            Name = "Fill",
+            BackgroundColor3 = RP_COLORS.ButtonBg,
+            BackgroundTransparency = 0.08,
+            BorderSizePixel = 0,
+            Size = UDim2.fromScale(1, 1),
+            Parent = box
+        })
+        rpCorner(fill, 6)
+
+        local stroke = rpStroke(box, RP_COLORS.ButtonStroke, 1.1, 1)
+        stroke.Name = "Stroke"
+
+        rpMake("TextLabel", {
+            BackgroundTransparency = 1,
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.5, 0),
+            Size = UDim2.fromOffset(RP_COLORS.BoxSize, RP_COLORS.BoxSize),
+            Text = info.label,
+            Font = Enum.Font.GothamBold,
+            TextSize = RP_COLORS.IconSize,
+            TextColor3 = RP_COLORS.Text,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            TextYAlignment = Enum.TextYAlignment.Center,
+            Parent = btn
+        })
+
+        btn:SetAttribute("Locked", false)
+        btn:SetAttribute("ActionName", info.action)
+        btn:SetAttribute("TargetPlayerName", targetPlr and targetPlr.Name or "")
+        rpSetButtonVisual(btn, "normal")
+
+        btn.MouseEnter:Connect(function()
+            if btn:GetAttribute("Locked") then return end
+            rpSetButtonVisual(btn, "hover")
+        end)
+
+        btn.MouseLeave:Connect(function()
+            if btn:GetAttribute("Locked") then return end
+            rpSetButtonVisual(btn, "normal")
+        end)
+
+        table.insert(actionButtonsRef[info.action], btn)
+
+        local locked = rpIsOnCooldown(info.action)
+        local blocked = rpIsAdminPanelBlockedForPlayer(targetPlr)
+        local disabled = locked or blocked
+        btn.Active = not disabled
+        btn:SetAttribute("Locked", disabled)
+        if disabled then
+            rpSetButtonVisual(btn, "locked")
+        end
+
+        btn.MouseButton1Click:Connect(function()
+            if rpIsAdminPanelBlockedForPlayer(targetPlr) then
+                ShowNotification("ADMIN", "AP Panel blocked on Moby users")
+                rpRefreshActionButtonsForPlayer(targetPlr)
+                return
+            end
+
+            if rpIsOnCooldown(info.action) then
+                return
+            end
+
+            local targetName = (targetPlr and targetPlr.Name) or "target"
+            ShowNotification("ADMIN", "Attempting " .. info.action .. " on " .. targetName)
+
+            rpStartCooldown(info.action)
+            local ok = rpRunAdminCommand(targetPlr, info.action)
+
+            if ok == false then
+                ShowNotification("ADMIN", "Failed to send " .. info.action .. " to " .. targetName)
+            else
+                ShowNotification("ADMIN", "Sent " .. info.action .. " to " .. targetName)
+            end
+        end)
+
+        return btn
+    end
+
+    local function createPlayerRow(plr)
+        if not plr or plr == LocalPlayer then return end
+        if rows[plr.UserId] and rows[plr.UserId].Parent then return end
+
+        local count = 0
+        for _, child in ipairs(rpui.listHolder:GetChildren()) do
+            if child:IsA("Frame") and child.Name:match("^Row_") then
+                count = count + 1
+            end
+        end
+        local isAlt = (count % 2 == 0)
+        local rowColor = isAlt and RP_COLORS.RowA or RP_COLORS.RowB
+
+        local row = rpMake("Frame", {
+            Name = ("Row_%d"):format(plr.UserId),
+            BackgroundColor3 = rowColor,
+            BackgroundTransparency = 0.40,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, RP_COLORS.RowHeight),
+            ZIndex = 5,
+            Parent = rpui.listHolder
+        })
+        rowCreateCounter = rowCreateCounter + 1
+        row:SetAttribute("CreateIndex", rowCreateCounter)
+        row:SetAttribute("PlayerName", plr.Name)
+        rpCorner(row, RP_COLORS.RowCorner)
+        rpStroke(row, RP_COLORS.AccentSoft, 1, 0.98)
+        row.ClipsDescendants = true
+        rows[plr.UserId] = row
+
+        row.MouseEnter:Connect(function()
+            row.BackgroundColor3 = RP_COLORS.RowHover
+        end)
+        row.MouseLeave:Connect(function()
+            row.BackgroundColor3 = rowColor
+        end)
+
+        local avatarHolder = rpMake("Frame", {
+            BackgroundColor3 = Color3.fromRGB(9, 10, 14),
+            BorderSizePixel = 0,
+            Size = UDim2.fromOffset(34, 34),
+            Position = UDim2.fromOffset(8, 10),
+            Parent = row
+        })
+        rpCorner(avatarHolder, 8)
+        rpStroke(avatarHolder, RP_COLORS.AccentSoft, 1, 0.72)
+
+        local avatar = rpMake("ImageLabel", {
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1),
+            Position = UDim2.fromOffset(0, 0),
+            Image = "rbxthumb://type=AvatarHeadShot&id=" .. plr.UserId .. "&w=150&h=150",
+            ZIndex = 10,
+            Parent = avatarHolder
+        })
+        rpCorner(avatar, 8)
+
+        local textWidth = -(RP_COLORS.ActionsWidth + RP_COLORS.SafeGap)
+
+        local nameLabel = rpMake("TextLabel", {
+            Name = "DisplayNameLabel",
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(50, 6),
+            Size = UDim2.new(1, textWidth, 0, 20),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = plr.DisplayName,
+            Font = Enum.Font.GothamBold,
+            TextSize = RP_COLORS.NameSize,
+            TextColor3 = RP_COLORS.Text,
+            ZIndex = 10,
+            Parent = row
+        })
+
+        updateUserTag(plr)
+
+        rpMake("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(50, 23),
+            Size = UDim2.new(1, textWidth, 0, 16),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = "@" .. plr.Name,
+            Font = Enum.Font.GothamMedium,
+            TextSize = RP_COLORS.UserSize,
+            TextColor3 = RP_COLORS.SubText,
+            ZIndex = 10,
+            Parent = row
+        })
+
+        local status = rpMake("TextLabel", {
+            Name = "Status",
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(50, 37),
+            Size = UDim2.new(1, textWidth, 0, 14),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Text = "",
+            Font = Enum.Font.GothamBold,
+            TextSize = RP_COLORS.StatusSize,
+            TextColor3 = RP_COLORS.Yellow,
+            ZIndex = 10,
+            Parent = row
+        })
+        stealLabels[plr.UserId] = status
+
+        local actions = rpMake("Frame", {
+            Name = "Actions",
+            BackgroundTransparency = 1,
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -8, 0.5, 0),
+            Size = UDim2.fromOffset(RP_COLORS.ActionsWidth, RP_COLORS.ButtonSize),
+            ZIndex = 12,
+            Parent = row
+        })
+
+        local actionList = Instance.new("UIListLayout")
+        actionList.FillDirection = Enum.FillDirection.Horizontal
+        actionList.SortOrder = Enum.SortOrder.LayoutOrder
+        actionList.HorizontalAlignment = Enum.HorizontalAlignment.Left
+        actionList.VerticalAlignment = Enum.VerticalAlignment.Center
+        actionList.Padding = UDim.new(0, 0)
+        actionList.Parent = actions
+
+        for i, b in ipairs(RP_BUTTONS) do
+            createActionButton(actions, b, i, plr)
+        end
+
+        local bottomLine = rpMake("Frame", {
+            Name = "Line",
+            BackgroundColor3 = RP_COLORS.RowLine,
+            BackgroundTransparency = 0.93,
+            BorderSizePixel = 0,
+            Position = UDim2.new(0, 16, 1, -1),
+            Size = UDim2.new(1, -32, 0, 1),
+            Parent = row
+        })
+
+        row.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+            if rpIsAdminPanelBlockedForPlayer(plr) then
+                ShowNotification("ADMIN", "AP Panel blocked on Moby users")
+                rpRefreshActionButtonsForPlayer(plr)
+                return
+            end
+
+            local orderedActions = {"ragdoll", "jail", "rocket", "balloon", "jumpscare", "inverse", "tiny", "morph"}
+            local hasAnyAvailable = false
+            for _, action in ipairs(orderedActions) do
+                if not rpIsOnCooldown(action) then
+                    hasAnyAvailable = true
+                    break
+                end
+            end
+
+            if hasAnyAvailable then
+                local sentAny = false
+                for _, action in ipairs(orderedActions) do
+                    if rpIsOnCooldown(action) then
+                        continue
+                    end
+                    rpStartCooldown(action)
+                    if rpIsAdminPanelBlockedForPlayer(plr) then
+                        ShowNotification("ADMIN", "AP Panel blocked on Moby users")
+                        rpRefreshActionButtonsForPlayer(plr)
+                        break
+                    end
+                    rpRunAdminCommand(plr, action)
+                    sentAny = true
+                    task.wait(0.01)
+                end
+                if sentAny then
+                    ShowNotification("ADMIN", "Triggered ALL on " .. plr.Name)
+                end
+            end
+        end)
+
+        local cons = {}
+        table.insert(cons, plr:GetAttributeChangedSignal("Stealing"):Connect(function()
+            updateStatus(plr)
+        end))
+        table.insert(cons, plr:GetAttributeChangedSignal("StealingIndex"):Connect(function()
+            updateStatus(plr)
+        end))
+        table.insert(cons, plr.CharacterAdded:Connect(function(char)
+            task.defer(function()
+                updateUserTag(plr)
+                local ok = pcall(function()
+                    char.DescendantAdded:Connect(function()
+                        task.defer(function()
+                            updateUserTag(plr)
+                        end)
+                    end)
+                    char.DescendantRemoving:Connect(function()
+                        task.defer(function()
+                            updateUserTag(plr)
+                        end)
+                    end)
+                end)
+            end)
+        end))
+        if plr.Character then
+            table.insert(cons, plr.Character.DescendantAdded:Connect(function()
+                task.defer(function()
+                    updateUserTag(plr)
+                end)
+            end))
+            table.insert(cons, plr.Character.DescendantRemoving:Connect(function()
+                task.defer(function()
+                    updateUserTag(plr)
+                end)
+            end))
+        end
+        attrCons[plr.UserId] = cons
+
+        updateStatus(plr)
+        updateUserTag(plr)
+        rpRefreshActionButtonsForPlayer(plr)
+        sortRows()
+    end
+
+    local function removePlayerRow(plr)
+        local row = rows[plr.UserId]
+        if row then
+            row:Destroy()
+            rows[plr.UserId] = nil
+        end
+        stealLabels[plr.UserId] = nil
+        local cons = attrCons[plr.UserId]
+        if cons then
+            for _, c in ipairs(cons) do
+                pcall(function()
+                    c:Disconnect()
+                end)
+            end
+            attrCons[plr.UserId] = nil
+        end
+    end
+
+    rpui.refreshBtn.MouseButton1Click:Connect(function()
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer then
+                createPlayerRow(plr)
+                updateStatus(plr)
+            end
+        end
+        sortRows()
+        ShowNotification("ADMIN PANEL", "Player list refreshed")
+    end)
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer then
+            createPlayerRow(plr)
+        end
+    end
+
+    Players.PlayerAdded:Connect(function(plr)
+        task.defer(function()
+            createPlayerRow(plr)
+        end)
+    end)
+    Players.PlayerRemoving:Connect(removePlayerRow)
+
+    RunService.Heartbeat:Connect(function()
+        if not rpui.adminGui.Parent then return end
+        updateProxViz()
+    end)
+
+    task.spawn(function()
+        while rpui.adminGui.Parent do
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer then
+                    updateUserTag(plr)
+                end
+            end
+            task.wait(0.25)
+        end
+    end)
+
+    if Config.HideAdminPanel then
+        rpui.adminGui.Enabled = false
+    end
+end
+
+__initAdminPanelLiteralReplacement()
